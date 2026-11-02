@@ -46,7 +46,7 @@ export async function getSponsors<T = Record<string, unknown>>(payload: Payload,
   const { docs } = await payload.find({
     collection: o.sponsors as CollectionSlug,
     where: { and: [publicSponsors, ...(opts.where ? [opts.where] : [])] },
-    sort: 'order',
+    sort: '_order',
     depth: opts.depth ?? 1,
     pagination: false,
     overrideAccess: true,
@@ -54,7 +54,7 @@ export async function getSponsors<T = Record<string, unknown>>(payload: Payload,
     select: { contacts: false } as never,
   })
   const tiers = o.tiers
-    ? ((await payload.find({ collection: o.tiers as CollectionSlug, sort: 'order', pagination: false, depth: 0, overrideAccess: true, locale: opts.locale as never })).docs as unknown as {
+    ? ((await payload.find({ collection: o.tiers as CollectionSlug, sort: '_order', pagination: false, depth: 0, overrideAccess: true, locale: opts.locale as never })).docs as unknown as {
         id: string
         name: string
         description?: string | null

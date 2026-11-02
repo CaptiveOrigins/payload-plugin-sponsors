@@ -26,6 +26,7 @@ export const sponsorsPlugin =
       replyTo: options.replyTo,
       publicURL: options.publicURL,
       adminView: options.adminView ?? true,
+      scopeField: options.scopeField,
     }
     const userSlug = config.admin?.user ?? 'users'
     const sponsors = { ...sponsorsCollection(o), endpoints: [optOutEndpoint, archiveEndpoint] }

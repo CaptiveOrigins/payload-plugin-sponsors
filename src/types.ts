@@ -27,6 +27,8 @@ export type SponsorsPluginOptions = {
   overrides?: { sponsors?: (c: CollectionConfig) => CollectionConfig; tiers?: (c: CollectionConfig) => CollectionConfig; updates?: (c: CollectionConfig) => CollectionConfig }
   /** Add the Sponsors overview in the admin (/admin/sponsors). Default true. */
   adminView?: boolean
+  /** A field that separates owners (e.g. `tenant` with multi-tenancy): new sponsors are placed alphabetically among their own. */
+  scopeField?: string
 }
 
 export type ResolvedSponsors = {
@@ -41,6 +43,7 @@ export type ResolvedSponsors = {
   replyTo?: string
   publicURL?: string
   adminView: boolean
+  scopeField?: string
 }
 
 /** A listing created by another plugin (e.g. memberships): identified by `source` + `externalRef`. */

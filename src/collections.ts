@@ -1,10 +1,43 @@
-import type { Access, CollectionConfig, FieldAccess, Where } from 'payload'
+import type { Access, CollectionBeforeChangeHook, CollectionConfig, FieldAccess, Where } from 'payload'
+import { generateKeyBetween } from 'payload/shared'
 
 import type { ResolvedSponsors } from './types.js'
 
 const notArchived: Where = { or: [{ archivedAt: { exists: false } }, { archivedAt: { equals: null } }] }
 /** Public: listed and not archived. */
 export const publicSponsors: Where = { and: [{ listed: { equals: true } }, notArchived] }
+
+/**
+ * Sponsors are drag-and-drop ordered (Payload `orderable`); a new one goes between its
+ * alphabetical neighbours (within `scopeField`), so the default order is A–Z.
+ */
+const placeAlphabetically =
+  (o: ResolvedSponsors): CollectionBeforeChangeHook =>
+  async ({ data, operation, req }) => {
+    if (operation !== 'create' || data._order || !data.name) return data
+    const scope = o.scopeField ? data[o.scopeField] : undefined
+    const scopeId = scope && typeof scope === 'object' ? (scope as { id: unknown }).id : scope
+    const { docs } = await req.payload.find({
+      collection: o.sponsors as never,
+      where: o.scopeField && scopeId ? { [o.scopeField]: { equals: scopeId } } : {},
+      sort: '_order',
+      depth: 0,
+      pagination: false,
+      overrideAccess: true,
+      select: { name: true, _order: true } as never,
+      req,
+    })
+    const ordered = docs as unknown as { name: string; _order?: string }[]
+    const next = ordered.findIndex((d) => String(d.name).localeCompare(String(data.name), 'en', { sensitivity: 'base' }) > 0)
+    const before = next === -1 ? (ordered.at(-1)?._order ?? null) : next > 0 ? (ordered[next - 1]!._order ?? null) : null
+    const after = next === -1 ? null : (ordered[next]!._order ?? null)
+    try {
+      data._order = generateKeyBetween(before, after)
+    } catch {
+      // Neighbours out of order after manual moves: Payload appends it at the end instead.
+    }
+    return data
+  }
 
 export function sponsorsCollection(o: ResolvedSponsors): CollectionConfig {
   const manager: Access = async ({ req }) => Boolean(req.user) && (await o.canManage({ req }))
@@ -19,12 +52,14 @@ export function sponsorsCollection(o: ResolvedSponsors): CollectionConfig {
     labels: { singular: 'Sponsor', plural: 'Sponsors' },
     admin: {
       useAsTitle: 'name',
-      defaultColumns: ['name', ...(o.tiers ? ['tier'] : []), 'attribution', 'order', 'listed'],
-      description: 'Shown on your sponsors page, in order. Use the sponsor’s own name, logo and wording. Contacts are private.',
+      defaultColumns: ['name', ...(o.tiers ? ['tier'] : []), 'attribution', 'listed'],
+      description: 'Shown on your sponsors page in this order (A–Z for new sponsors; drag rows to change it). Use the sponsor’s own name, logo and wording. Contacts are private.',
     },
     access: { read, create: manager, update: manager, delete: manager },
     // No drafts: opt-outs, archiving and "last update sent" change sponsors on their own; a switch decides visibility.
-    defaultSort: 'order',
+    orderable: true,
+    defaultSort: '_order',
+    hooks: { beforeChange: [placeAlphabetically(o)] },
     fields: [
       { name: 'name', type: 'text', required: true, admin: { description: 'Exactly as the sponsor wants it shown.' } },
       {
@@ -45,13 +80,7 @@ export function sponsorsCollection(o: ResolvedSponsors): CollectionConfig {
       ...(o.tiers ? [{ name: 'tier', type: 'relationship' as const, relationTo: o.tiers as never, admin: { position: 'sidebar' as const } }] : []),
       { name: 'attribution', type: 'text', admin: { description: 'Short line, e.g. “Founding sponsor”.' } },
       { name: 'summary', type: 'textarea', admin: { description: 'Who they are and what they support, in a few sentences.' } },
-      {
-        type: 'row',
-        fields: [
-          { name: 'since', type: 'date', admin: { width: '50%', date: { pickerAppearance: 'monthOnly', displayFormat: 'MMMM yyyy' } } },
-          { name: 'order', type: 'number', defaultValue: 100, admin: { width: '50%', description: 'Lower comes first.' } },
-        ],
-      },
+      { name: 'since', type: 'date', admin: { date: { pickerAppearance: 'monthOnly', displayFormat: 'MMMM yyyy' } } },
       {
         name: 'contacts',
         type: 'array',
@@ -89,16 +118,16 @@ export function tiersCollection(o: ResolvedSponsors & { tiers: string }): Collec
   return {
     slug: o.tiers,
     labels: { singular: 'Sponsor tier', plural: 'Sponsor tiers' },
-    admin: { useAsTitle: 'name', defaultColumns: ['name', 'order'], description: 'Optional levels (e.g. Founding, Gold). Lower order is shown first.' },
+    admin: { useAsTitle: 'name', defaultColumns: ['name', 'color'], description: 'Optional levels (e.g. Founding, Gold), shown in this order: drag rows to change it.' },
     access: { read: () => true, create: manager, update: manager, delete: manager },
-    defaultSort: 'order',
+    orderable: true,
+    defaultSort: '_order',
     fields: [
       {
         type: 'row',
         fields: [
-          { name: 'name', type: 'text', required: true, admin: { width: '50%' } },
-          { name: 'order', type: 'number', defaultValue: 100, admin: { width: '25%' } },
-          { name: 'color', type: 'text', admin: { width: '25%', description: 'Badge color, e.g. #cf8137.' } },
+          { name: 'name', type: 'text', required: true, admin: { width: '60%' } },
+          { name: 'color', type: 'text', admin: { width: '40%', description: 'Badge color, e.g. #cf8137.' } },
         ],
       },
       { name: 'description', type: 'textarea', admin: { description: 'Shown above the tier on the public page.' } },

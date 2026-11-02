@@ -15,7 +15,7 @@ export async function SponsorsView({ initPageResult, params, searchParams }: Adm
   const admin = req.payload.config.routes.admin
   const apiBase = `${req.payload.config.serverURL ?? ''}${req.payload.config.routes.api}/${o.sponsors}`
   const docs = allowed
-    ? ((await req.payload.find({ collection: o.sponsors as CollectionSlug, depth: 1, pagination: false, sort: 'order', overrideAccess: true, req })).docs as unknown as Row[])
+    ? ((await req.payload.find({ collection: o.sponsors as CollectionSlug, depth: 1, pagination: false, sort: '_order', overrideAccess: true, req })).docs as unknown as Row[])
     : []
   const tierName = (r: Row) => (r.tier && typeof r.tier === 'object' ? r.tier.name : null)
   const current = docs.filter((d) => !d.archivedAt)

@@ -3,10 +3,11 @@
 Sponsors for [Payload](https://payloadcms.com): a public sponsor list with optional tiers,
 private contacts, and **sponsor updates written and sent from the admin**.
 
-- **Sponsors**: name, logo, website, attribution line, summary, since, order, tier, and a
-  “Show on the public page” switch. **Contacts** (one or more emails per sponsor) are visible
+- **Sponsors**: name, logo, website, attribution line, summary, since, tier, and a
+  “Show on the public page” switch. Ordered by drag and drop in the admin; new sponsors are
+  placed alphabetically, so the default order is A–Z. **Contacts** (one or more emails per sponsor) are visible
   to managers only, never in the public API.
-- **Tiers** (optional): Founding, Gold… with order, color, description and perks.
+- **Tiers** (optional): Founding, Gold… with color, description and perks, ordered by drag and drop.
 - **Sponsor updates**: subject and rich-text body in the admin’s own editor; send to all
   current sponsors, chosen sponsors and/or whole tiers. The admin shows who it will reach and
   asks to confirm. Every contact gets their own email with a signed **opt-out link**; opted-out
@@ -62,6 +63,13 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 | `publicURL` | `serverURL` | Origin for opt-out links |
 | `overrides` | | Adjust the generated collections (e.g. multi-tenant fields) |
 | `adminView` | `true` | The `/admin/sponsors` overview and nav link |
+| `scopeField` | | Field separating owners (e.g. `tenant`): new sponsors are placed A–Z among their own |
+
+## Upgrading from 0.1
+
+0.2 replaces the numeric `order` fields with drag-and-drop ordering (Payload `orderable`, field
+`_order`). Give existing sponsors and tiers an `_order` once (e.g. with `generateNKeysBetween` from
+`payload/shared`, sponsors A–Z, tiers in their old order).
 
 ## License
 

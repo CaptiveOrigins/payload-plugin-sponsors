@@ -41,11 +41,11 @@ beforeAll(async () => {
     }),
   })
   admin = await payload.create({ collection: 'users', data: { email: 'admin@example.org', password: 'admin-password-long', role: 'admin' } as never })
-  gold = await payload.create({ collection: 'sponsor-tiers' as never, data: { name: 'Gold', order: 1 } as never })
-  friends = await payload.create({ collection: 'sponsor-tiers' as never, data: { name: 'Friends', order: 2 } as never })
+  gold = await payload.create({ collection: 'sponsor-tiers' as never, data: { name: 'Gold' } as never })
+  friends = await payload.create({ collection: 'sponsor-tiers' as never, data: { name: 'Friends' } as never })
   const sponsor = (name: string, extra: Doc) => payload.create({ collection: 'sponsors' as never, data: { name, listed: true, ...extra } as never })
-  await sponsor('Herp Society', { tier: gold.id, order: 1, contacts: [{ name: 'Pat', email: 'pat@herp.example' }, { email: 'board@herp.example' }] })
-  await sponsor('Conservation Foundation', { tier: gold.id, order: 2, contacts: [{ email: 'hello@cf.example', optedOut: true }] })
+  await sponsor('Herp Society', { tier: gold.id, contacts: [{ name: 'Pat', email: 'pat@herp.example' }, { email: 'board@herp.example' }] })
+  await sponsor('Conservation Foundation', { tier: gold.id, contacts: [{ email: 'hello@cf.example', optedOut: true }] })
   await sponsor('Local Shop', { tier: friends.id, contacts: [{ email: 'shop@shop.example' }] })
   await sponsor('Not yet', { listed: false, contacts: [{ email: 'secret@x.example' }] })
 }, 120_000)
@@ -66,7 +66,8 @@ describe('sponsors', () => {
     expect((asAdmin.docs as Doc[]).find((d) => d.name === 'Herp Society')?.contacts).toHaveLength(2)
     const groups = await getSponsors(payload)
     expect(groups.map((g) => [g.tier?.name ?? null, g.sponsors.map((s: Doc) => s.name)])).toEqual([
-      ['Gold', ['Herp Society', 'Conservation Foundation']],
+      // Tiers in their (drag-and-drop) order; sponsors A–Z unless moved.
+      ['Gold', ['Conservation Foundation', 'Herp Society']],
       ['Friends', ['Local Shop']],
     ])
     expect(JSON.stringify(groups)).not.toContain('@')
