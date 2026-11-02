@@ -113,6 +113,8 @@ export function updatesCollection(o: ResolvedSponsors, userSlug: string): Collec
   return {
     slug: o.updates,
     labels: { singular: 'Sponsor update', plural: 'Sponsor updates' },
+    // Not "SponsorUpdate": that clashes with the Sponsors collection's own update mutation input.
+    graphQL: { singularName: 'SponsorMailing', pluralName: 'SponsorMailings' },
     admin: {
       useAsTitle: 'subject',
       defaultColumns: ['subject', 'status', 'sentAt'],
