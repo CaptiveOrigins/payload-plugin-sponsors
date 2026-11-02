@@ -1,4 +1,4 @@
-# payload-plugin-sponsors
+# payload-plugin-sponsor
 
 Sponsors for [Payload](https://payloadcms.com): a public sponsor list with optional tiers,
 private contacts, and **sponsor updates written and sent from the admin**.
@@ -22,11 +22,11 @@ private contacts, and **sponsor updates written and sent from the admin**.
 ## Install
 
 ```bash
-npm install @captiveorigins/payload-plugin-sponsors
+npm install @captiveorigins/payload-plugin-sponsor
 ```
 
 ```ts
-import { sponsorsPlugin } from '@captiveorigins/payload-plugin-sponsors'
+import { sponsorsPlugin } from '@captiveorigins/payload-plugin-sponsor'
 
 export default buildConfig({
   editor: lexicalEditor(),
@@ -44,7 +44,7 @@ export default buildConfig({
 Show them on your site:
 
 ```ts
-import { getSponsors } from '@captiveorigins/payload-plugin-sponsors'
+import { getSponsors } from '@captiveorigins/payload-plugin-sponsor'
 
 const groups = await getSponsors(payload) // [{ tier: { name, … } | null, sponsors: [...] }]
 ```
@@ -66,6 +66,9 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 | `scopeField` | | Field separating owners (e.g. `tenant`): new sponsors are placed A–Z among their own |
 
 ## Upgrading from 0.1
+
+The package was renamed from `@captiveorigins/payload-plugin-sponsors` (0.1.x) to `@captiveorigins/payload-plugin-sponsor`; the exports are unchanged, so only the import path changes.
+
 
 0.2 replaces the numeric `order` fields with drag-and-drop ordering (Payload `orderable`, field
 `_order`). Give existing sponsors and tiers an `_order` once (e.g. with `generateNKeysBetween` from

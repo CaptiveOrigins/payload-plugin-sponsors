@@ -46,8 +46,8 @@ export const sponsorsPlugin =
             ...config.admin,
             components: {
               ...components,
-              afterNavLinks: [...(components.afterNavLinks ?? []), '@captiveorigins/payload-plugin-sponsors/rsc#SponsorsNavLink'],
-              views: { ...components.views, sponsors: { Component: '@captiveorigins/payload-plugin-sponsors/rsc#SponsorsView', path: '/sponsors' } },
+              afterNavLinks: [...(components.afterNavLinks ?? []), '@captiveorigins/payload-plugin-sponsor/rsc#SponsorsNavLink'],
+              views: { ...components.views, sponsors: { Component: '@captiveorigins/payload-plugin-sponsor/rsc#SponsorsView', path: '/sponsors' } },
             },
           }
         : config.admin,

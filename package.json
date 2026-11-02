@@ -1,5 +1,5 @@
 {
-  "name": "@captiveorigins/payload-plugin-sponsors",
+  "name": "@captiveorigins/payload-plugin-sponsor",
   "version": "0.2.0",
   "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin. Ready for membership plugins to list members as sponsors.",
   "keywords": ["payload", "payload-plugin", "payloadcms", "sponsors", "supporters", "email", "nonprofit"],
