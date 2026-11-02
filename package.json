@@ -1,20 +1,50 @@
 {
   "name": "@captiveorigins/payload-plugin-sponsors",
   "version": "0.3.0",
-  "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin. Ready for membership plugins to list members as sponsors.",
-  "keywords": ["payload", "payload-plugin", "payloadcms", "sponsors", "supporters", "email", "nonprofit"],
+  "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin.",
+  "homepage": "https://github.com/mgilardi/payload-plugin-sponsors#readme",
+  "bugs": {
+    "url": "https://github.com/mgilardi/payload-plugin-sponsors/issues"
+  },
+  "keywords": [
+    "payload",
+    "payload-plugin",
+    "payloadcms",
+    "sponsors",
+    "supporters",
+    "email",
+    "nonprofit"
+  ],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/mgilardi/payload-plugin-sponsors.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mgilardi/payload-plugin-sponsors.git"
+  },
   "type": "module",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./rsc": { "types": "./dist/rsc/index.d.ts", "import": "./dist/rsc/index.js" },
-    "./client": { "types": "./dist/client/index.d.ts", "import": "./dist/client/index.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./rsc": {
+      "types": "./dist/rsc/index.d.ts",
+      "import": "./dist/rsc/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js"
+    }
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "README.md", "LICENSE"],
-  "engines": { "node": ">=20.9" },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.9"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
