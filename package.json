@@ -1,10 +1,10 @@
 {
-  "name": "@captiveorigins/payload-plugin-sponsor",
-  "version": "0.2.0",
+  "name": "@captiveorigins/payload-plugin-sponsors",
+  "version": "0.3.0",
   "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin. Ready for membership plugins to list members as sponsors.",
   "keywords": ["payload", "payload-plugin", "payloadcms", "sponsors", "supporters", "email", "nonprofit"],
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/mgilardi/payload-plugin-sponsor.git" },
+  "repository": { "type": "git", "url": "git+https://github.com/mgilardi/payload-plugin-sponsors.git" },
   "type": "module",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
