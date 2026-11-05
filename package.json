@@ -2,9 +2,9 @@
   "name": "@captiveorigins/payload-plugin-sponsors",
   "version": "0.3.0",
   "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin.",
-  "homepage": "https://github.com/mgilardi/payload-plugin-sponsors#readme",
+  "homepage": "https://github.com/CaptiveOrigins/payload-plugin-sponsors#readme",
   "bugs": {
-    "url": "https://github.com/mgilardi/payload-plugin-sponsors/issues"
+    "url": "https://github.com/CaptiveOrigins/payload-plugin-sponsors/issues"
   },
   "keywords": [
     "payload",
@@ -18,7 +18,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mgilardi/payload-plugin-sponsors.git"
+    "url": "git+https://github.com/CaptiveOrigins/payload-plugin-sponsors.git"
   },
   "type": "module",
   "exports": {
