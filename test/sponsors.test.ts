@@ -113,3 +113,16 @@ describe('sponsors', () => {
     expect((await getSponsors(payload)).flatMap((g) => g.sponsors.map((s: Doc) => s.name))).not.toContain('Member Co (renamed)')
   })
 })
+
+describe('the default order', () => {
+  it('places each new sponsor between its alphabetical neighbours, with its own key', async () => {
+    for (const name of ['Mm Beta Reptiles', 'Mm Alpha Herps', 'Mm Delta Dragons', 'Mm Gamma Geckos']) await payload.create({ collection: 'sponsors' as never, data: { name } as never })
+    // `_order` is hidden from the API, so read it where it's stored.
+    const raw = await (payload.db as unknown as { collections: Record<string, { find: (f: object) => { sort: (s: object) => { lean: () => Promise<{ name: string; _order?: string }[]> } } }> }).collections
+      .sponsors!.find({ name: { $regex: '^Mm ' } })
+      .sort({ _order: 1 })
+      .lean()
+    expect(raw.map((d) => d.name)).toEqual(['Mm Alpha Herps', 'Mm Beta Reptiles', 'Mm Delta Dragons', 'Mm Gamma Geckos'])
+    expect(new Set(raw.map((d) => d._order)).size).toBe(4)
+  })
+})
