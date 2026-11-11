@@ -26,6 +26,17 @@ private contacts, and **sponsor updates written and sent from the admin**.
 - **For membership plugins**: `upsertListing()` / `retireListing()` list members as sponsors
   (for example, a paid tier with a sponsor-wall perk) and remove them when they leave.
 
+## On its own, and with others
+
+**On its own.** Sponsors needs Payload's Lexical editor, an upload collection for logos (`media` by default) and working email (`payload.sendEmail`, or your own `sendEmail`). It doesn't import any other Captive Origins plugin.
+
+**Works with:**
+
+- **Membership** (`@captiveorigins/payload-plugin-membership`): from Membership's `onStatusChange`, your site calls `upsertListing()` and `retireListing()`, so members of a tier marked "Members are listed as sponsors" show up here and leave when they cancel. Neither plugin imports the other.
+- **Multi-tenant** (`@payloadcms/plugin-multi-tenant`): add the tenant field with `overrides` and set `scopeField`, and new sponsors are placed A–Z within their own site.
+
+**Family.** Sponsors is in the Patronage family, with Membership, Backing, Credits, Printify and Roadmap. Backing and Credits are named but not built yet, and the families are a working draft that may change.
+
 ## Install
 
 ```bash
