@@ -1,6 +1,7 @@
 import type { Access, CollectionBeforeChangeHook, CollectionConfig, FieldAccess, Where } from 'payload'
 import { generateKeyBetween } from 'payload/shared'
 
+import { isManager } from './access.js'
 import type { ResolvedSponsors } from './types.js'
 
 const notArchived: Where = { or: [{ archivedAt: { exists: false } }, { archivedAt: { equals: null } }] }
@@ -40,13 +41,12 @@ const placeAlphabetically =
   }
 
 export function sponsorsCollection(o: ResolvedSponsors): CollectionConfig {
-  const manager: Access = async ({ req }) => Boolean(req.user) && (await o.canManage({ req }))
-  const managerField: FieldAccess = async ({ req }) => Boolean(req.user) && (await o.canManage({ req }))
-  // Everyone reads published, current sponsors; managers read everything.
-  const read: Access = async ({ req }) => {
-    if (req.user && (await o.canManage({ req }))) return true
-    return publicSponsors
-  }
+  // Only an exact `true` from `canManage` makes a manager; a truthy value or a thrown error is a no.
+  const manager: Access = ({ req }) => isManager(o, req)
+  const managerField: FieldAccess = ({ req }) => isManager(o, req)
+  // Everyone reads published, current sponsors (the plugin's own query); managers read everything.
+  // The site's answer is never passed through, so a truthy non-`true` can't widen this to all rows.
+  const read: Access = async ({ req }) => ((await isManager(o, req)) ? true : publicSponsors)
   return {
     slug: o.sponsors,
     labels: { singular: 'Sponsor', plural: 'Sponsors' },
@@ -114,7 +114,7 @@ export function sponsorsCollection(o: ResolvedSponsors): CollectionConfig {
 }
 
 export function tiersCollection(o: ResolvedSponsors & { tiers: string }): CollectionConfig {
-  const manager: Access = async ({ req }) => Boolean(req.user) && (await o.canManage({ req }))
+  const manager: Access = ({ req }) => isManager(o, req)
   return {
     slug: o.tiers,
     labels: { singular: 'Sponsor tier', plural: 'Sponsor tiers' },
@@ -138,7 +138,7 @@ export function tiersCollection(o: ResolvedSponsors & { tiers: string }): Collec
 }
 
 export function updatesCollection(o: ResolvedSponsors, userSlug: string): CollectionConfig {
-  const manager: Access = async ({ req }) => Boolean(req.user) && (await o.canManage({ req }))
+  const manager: Access = ({ req }) => isManager(o, req)
   return {
     slug: o.updates,
     labels: { singular: 'Sponsor update', plural: 'Sponsor updates' },

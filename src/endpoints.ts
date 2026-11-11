@@ -1,19 +1,12 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
 
+import { isManager } from './access.js'
 import { deliveryKey, isStuck, optOut, recipientsOf, recoverSend, sendUpdate, setArchived, sponsorsOf } from './api.js'
 
+/** Managers only, and only an exact `true` from `canManage` counts (a truthy value or an error is a no). */
 const allowed = async (req: PayloadRequest) => {
   if (!req.user) throw new APIError('Sign in first.', 401, undefined, true)
-  if (!(await sponsorsOf(req.payload).canManage({ req }))) throw new APIError('Not allowed.', 403, undefined, true)
-}
-
-/** Managers only, and only an exact `true` from `canManage` counts (a truthy value or an error is a no). */
-const managerExactly = async (req: PayloadRequest) => {
-  if (!req.user) throw new APIError('Sign in first.', 401, undefined, true)
-  const yes = await Promise.resolve()
-    .then(() => sponsorsOf(req.payload).canManage({ req }))
-    .catch(() => false)
-  if (yes !== true) throw new APIError('Not allowed.', 403, undefined, true)
+  if (!(await isManager(sponsorsOf(req.payload), req))) throw new APIError('Not allowed.', 403, undefined, true)
 }
 
 /** GET /api/<updates>/:id/recipients: who an update would reach (for the confirm dialog). */
@@ -57,7 +50,7 @@ export const recoverEndpoint: Endpoint = {
   path: '/:id/recover',
   method: 'post',
   handler: async (req) => {
-    await managerExactly(req)
+    await allowed(req)
     try {
       return Response.json(await recoverSend(req.payload, String(req.routeParams?.id)))
     } catch (error) {

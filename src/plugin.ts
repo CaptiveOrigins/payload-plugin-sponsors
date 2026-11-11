@@ -36,7 +36,8 @@ export const sponsorsPlugin =
     const updates = { ...updatesCollection(o, userSlug), endpoints: [recipientsEndpoint, sendEndpoint, recoverEndpoint] }
     const added = [
       options.overrides?.sponsors ? options.overrides.sponsors(sponsors) : sponsors,
-      ...(o.tiers ? [options.overrides?.tiers ? options.overrides.tiers(tiersCollection({ ...o, tiers: o.tiers })) : tiersCollection({ ...o, tiers: o.tiers })] : []),
+      // The same `o`, not a copy, so every collection asks the one `canManage` that `sponsorsOf` returns.
+      ...(o.tiers ? [options.overrides?.tiers ? options.overrides.tiers(tiersCollection(o as ResolvedSponsors & { tiers: string })) : tiersCollection(o as ResolvedSponsors & { tiers: string })] : []),
       options.overrides?.updates ? options.overrides.updates(updates) : updates,
     ]
     const components = config.admin?.components ?? {}

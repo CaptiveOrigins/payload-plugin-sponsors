@@ -81,8 +81,8 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 |---|---|---|
 | `slugs` | `sponsors`, `sponsor-tiers`, `sponsor-updates` | `tiers: false` turns tiers off |
 | `uploads` | `media` | Collection for logos |
-| `canManage` | signed-in users | Who manages sponsors, sees contacts and sends updates |
-| `canSend` | always | E.g. off in development |
+| `canManage` | signed-in users | Who manages sponsors, sees contacts and sends updates. Only `true` counts: see [Access](#access) |
+| `canSend` | always | E.g. off in development. Only `true` allows a send |
 | `sendEmail` | `payload.sendEmail` | Deliver one email |
 | `renderEmail` | | Wrap the update in your layout |
 | `replyTo` | | Reply-To on updates |
@@ -91,6 +91,30 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 | `adminView` | `true` | The `/admin/sponsors` overview and nav link |
 | `scopeField` | | Field separating owners (e.g. `tenant`): new sponsors are placed A–Z among their own |
 | `staleSendMinutes` | `30` | Minutes without progress before a send counts as stopped and can be recovered |
+
+## Access
+
+`canManage` decides everything a manager can do, and only an answer of exactly `true` counts.
+Anything else is a no: `false`, `1`, `'yes'`, an object, or an error thrown or rejected. An error
+doesn't escape as a 500; the request is refused. Nobody who isn't signed in is a manager, whatever
+`canManage` says.
+
+| Where | A manager | Anyone else |
+|---|---|---|
+| Sponsors | Reads all, creates, edits, deletes | Reads listed, non-archived sponsors only |
+| Contacts (field) | Reads and writes | Never sees them |
+| Tiers | Creates, edits, deletes | Reads |
+| Sponsor updates | Reads and writes | Nothing |
+| `recipients`, `send`, `archive`, `recover` endpoints | Allowed | 401 if not signed in, else 403 |
+| `/admin/sponsors` and its nav link | Shown | "You don't have access", no link |
+| Opt-out link | Anyone with a valid signed link | |
+
+Sponsors' read access is the one place that returns a query: a non-manager gets the plugin's own
+public filter. What `canManage` returns is never passed to Payload, so an object that looks like a
+query can't widen it. `canSend` follows the same rule: only `true` lets a send start, and anything
+else, an error included, refuses it with "Sending sponsor updates is turned off here" (400).
+
+`overrides` can change a collection's `access`; if you do, your rules replace these.
 
 ## Recovering a stopped send
 

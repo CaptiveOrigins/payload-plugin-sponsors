@@ -2,6 +2,15 @@
 
 Kept by this repo's owning session, per `~/Code/CLAUDE.md` "Test self-audits". Newest first.
 
+## 2026-11-11: only an exact `true` passes, everywhere
+
+Suite: 19 tests before, 23 after (`npx vitest run`, real Payload, in-memory MongoDB, fake mailer). Closes the "for the lead" item in the entry below: every access decision now fails closed.
+
+- **The change.** One helper, `src/access.ts`: `exactlyTrue` (only `true` passes; a throw or rejection is `false`), `isManager` (signed in, and `canManage` answered exactly `true`) and `sendingAllowed` (no `canSend`, or exactly `true`). Every check uses them: sponsors create, update and delete; sponsors read (managers `true`, everyone else the plugin's own `publicSponsors` query, so a site's object answer is never handed to Payload as a query); the contacts field; tiers writes; sponsor updates' access; the `recipients`, `send`, `archive` and `recover` endpoints (one guard, 401 or 403, never a 500); `canSend` in `sendUpdate`; the `/admin/sponsors` view and its nav link. The tiers collection now gets the same options object as the others, not a copy, so it asks the same `canManage` that `sponsorsOf` returns.
+- **Tests.** "only an exact yes from canManage or canSend": each entry point gets `1`, `'yes'`, `{}`, a query-shaped object (`{ listed: { equals: false } }`), a thrown error and a rejected promise, then `true`. "refuses collection and field access…" (public rows only, no contacts, no unlisted sponsor, sponsor/tier/update writes refused and nothing changed; with `true`, everything). "answers send, recipients, archive and recover with 403…" (no email, nothing changed; with `true`, each goes through). "sends nothing unless canSend answers exactly true…" (400 "turned off", never a 500). "shows the admin overview and its nav link only for an exact true" (also: not signed in is a no even when `canManage` says `true`).
+- **Mutation checks.** 13 mutations, each a Python string replace on the file, restored byte for byte (checked by SHA-256). All 13 fail the suite: truthy passing in `exactlyTrue`; errors rethrown; `isManager` without its sign-in check; truthy `canSend` passing; the old truthy check put back at each of sponsors writes, contacts field, sponsors read, tiers writes, updates access, the endpoint guard, `sendUpdate`'s `canSend`, the admin view and the nav link.
+- **Skipped.** The admin view is checked through its returned element tree, with Payload's admin shell (`@payloadcms/next/templates`) and `@payloadcms/ui` stubbed; it hasn't been rendered in a real admin. The opt-out endpoint has no access check by design (its link is signed per contact) and is already covered. Access set by a host through `overrides` is the host's own rule and isn't tested here.
+
 ## 2026-11-11: recovering a send the server stopped
 
 Suite: 12 tests before, 19 after (`npx vitest run`, real Payload, in-memory MongoDB, fake mailer: no email leaves the machine). Closes the "not covered" item from the entry below.

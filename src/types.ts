@@ -1,6 +1,6 @@
 import type { CollectionConfig, Payload, PayloadRequest } from 'payload'
 
-/** Who may manage sponsors and send updates (default: any signed-in user). */
+/** Who may manage sponsors and send updates (default: any signed-in user). Only exactly `true` counts; anything else, an error included, is no. */
 export type CanManage = (args: { req: PayloadRequest }) => boolean | Promise<boolean>
 
 /** One email to one sponsor contact. Default: `payload.sendEmail`. */
@@ -13,7 +13,7 @@ export type SponsorsPluginOptions = {
   uploads?: string
   /** Who manages sponsors, sees contacts and sends updates. */
   canManage?: CanManage
-  /** May updates be sent from this environment right now? (e.g. off in development). Default: always. */
+  /** May updates be sent from this environment right now? (e.g. off in development). Default: always. Only exactly `true` allows it. */
   canSend?: (args: { payload: Payload }) => boolean | Promise<boolean>
   /** Delivery. Default `payload.sendEmail`. */
   sendEmail?: SendEmail

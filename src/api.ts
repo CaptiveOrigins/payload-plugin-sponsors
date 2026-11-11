@@ -2,6 +2,7 @@ import crypto from 'node:crypto'
 
 import type { CollectionSlug, Payload, Where } from 'payload'
 
+import { sendingAllowed } from './access.js'
 import { publicSponsors } from './collections.js'
 import type { ExternalListing, ResolvedSponsors } from './types.js'
 
@@ -214,7 +215,7 @@ async function bodyHtml(body: unknown): Promise<string> {
  */
 export async function sendUpdate(payload: Payload, updateId: string, userId?: string | number | null): Promise<SendReport> {
   const o = sponsorsOf(payload)
-  if (o.canSend && !(await o.canSend({ payload }))) throw new Error('Sending sponsor updates is turned off here.')
+  if (!(await sendingAllowed(o, payload))) throw new Error('Sending sponsor updates is turned off here.')
   type UpdateDoc = {
     id: string
     subject: string

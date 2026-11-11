@@ -4,11 +4,16 @@ import { mongooseAdapter } from '@payloadcms/db-mongodb'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { MongoMemoryReplSet } from 'mongodb-memory-server'
 import { buildConfig, getPayload, type Payload } from 'payload'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { sponsorsOf } from '../src/api.js'
+import { SponsorsNavLink, SponsorsView } from '../src/rsc/SponsorsView.js'
 import { archiveEndpoint, optOutEndpoint, recipientsEndpoint, recoverEndpoint, sendEndpoint } from '../src/endpoints.js'
 import { getSponsors, optOut, optOutToken, recoverSend, retireListing, sendUpdate, setArchived, sponsorsPlugin, upsertListing } from '../src/index.js'
+
+// The admin view renders inside Payload's admin shell; a bare stand-in keeps the test to its own decision.
+vi.mock('@payloadcms/next/templates', () => ({ DefaultTemplate: ({ children }: { children: unknown }) => children }))
+vi.mock('@payloadcms/ui', () => ({ useConfig: () => ({ config: { routes: { api: '/api' } } }), useDocumentInfo: () => ({}) }))
 
 let payload: Payload
 let mongo: MongoMemoryReplSet
@@ -541,5 +546,150 @@ describe('a send the server stopped (recovery, 2026-11-11)', () => {
     const bare = {} as Parameters<ReturnType<typeof sponsorsPlugin>>[0]
     for (const bad of [0, -5, Number.NaN, Infinity]) expect(() => sponsorsPlugin({ staleSendMinutes: bad })(bare)).toThrow(/staleSendMinutes/)
     expect((sponsorsPlugin({ staleSendMinutes: 5 })(bare) as Doc).custom.sponsors).toMatchObject({ staleSendMinutes: 5 })
+  })
+})
+
+describe('only an exact yes from canManage or canSend (2026-11-11)', () => {
+  const asUser = (u: Doc) => ({ ...u, collection: 'users' })
+  // Each a no: truthy values, objects (one shaped like a query, which must not widen reads), and errors.
+  const noes: [string, () => unknown][] = [
+    ['1', () => 1],
+    ["'yes'", () => 'yes'],
+    ['{}', () => ({})],
+    ['a query-shaped object', () => ({ listed: { equals: false } })],
+    ['a thrown error', () => {
+      throw new Error('directory down')
+    }],
+    ['a rejected promise', async () => {
+      throw new Error('directory down')
+    }],
+  ]
+  const call = (endpoint: { handler: unknown }, id: unknown, body: Doc = {}) =>
+    (endpoint.handler as (r: unknown) => Promise<Response>)({ user: asUser(admin), payload, routeParams: { id: String(id) }, json: async () => body })
+  const saved = async (slug: string, id: unknown) => (await payload.findByID({ collection: slug as never, id: id as string, depth: 0 })) as Doc
+  /** Runs `body` with `canManage` (or `canSend`) answering `answer`, then puts the site's rule back. */
+  const answering = async (key: 'canManage' | 'canSend', answer: () => unknown, body: () => Promise<void>) => {
+    const o = sponsorsOf(payload)
+    const before = o[key]
+    o[key] = answer as never
+    try {
+      await body()
+    } finally {
+      o[key] = before as never
+    }
+  }
+  /** The text in a React element tree (components not rendered; enough to see what the view chose to show). */
+  const textOf = (node: unknown): string =>
+    node === null || node === undefined || typeof node === 'boolean'
+      ? ''
+      : typeof node === 'string' || typeof node === 'number'
+        ? String(node)
+        : Array.isArray(node)
+          ? node.map(textOf).join(' ')
+          : textOf((node as { props?: { children?: unknown } }).props?.children)
+  const view = async (user: Doc | null) =>
+    textOf(await SponsorsView({ initPageResult: { req: { user: user ? asUser(user) : null, payload, i18n: {} }, permissions: {}, visibleEntities: {}, locale: undefined }, params: {}, searchParams: {} } as never))
+  const navLink = async (user: Doc | null) => SponsorsNavLink({ payload, user: user ? asUser(user) : undefined })
+  let sponsor: Doc
+  let tier: Doc
+
+  beforeAll(async () => {
+    sponsor = (await payload.create({ collection: 'sponsors' as never, data: { name: 'Exact Yes', listed: true, contacts: [{ email: 'exact@yes.example' }] } as never })) as Doc
+    tier = (await payload.create({ collection: 'sponsor-tiers' as never, data: { name: 'Exact Tier' } as never })) as Doc
+  })
+
+  it('refuses collection and field access to anything but true: public rows only, no contacts, no writes', async () => {
+    const as = { overrideAccess: false, user: asUser(admin) }
+    const update = (await payload.create({ collection: 'sponsor-updates' as never, data: { subject: 'Exact', body: lexical('x'), recipients: { sponsors: [sponsor.id] } } as never })) as Doc
+    for (const [label, answer] of noes) {
+      await answering('canManage', answer, async () => {
+        const seen = await payload.find({ collection: 'sponsors' as never, pagination: false, ...as })
+        const names = seen.docs.map((d: Doc) => d.name)
+        expect(names, label).toContain('Exact Yes')
+        expect(names, label).not.toContain('Not yet') // unlisted: managers only
+        expect(JSON.stringify(seen.docs), label).not.toContain('@') // contacts field: managers only
+        await expect(payload.update({ collection: 'sponsors' as never, id: sponsor.id, data: { name: 'Changed' } as never, ...as }), label).rejects.toThrow()
+        await expect(payload.create({ collection: 'sponsors' as never, data: { name: 'Uninvited' } as never, ...as }), label).rejects.toThrow()
+        await expect(payload.delete({ collection: 'sponsors' as never, id: sponsor.id, ...as }), label).rejects.toThrow()
+        await expect(payload.update({ collection: 'sponsor-tiers' as never, id: tier.id, data: { name: 'Changed' } as never, ...as }), label).rejects.toThrow()
+        await expect(payload.delete({ collection: 'sponsor-tiers' as never, id: tier.id, ...as }), label).rejects.toThrow()
+        await expect(payload.find({ collection: 'sponsor-updates' as never, ...as }), label).rejects.toThrow()
+        await expect(payload.update({ collection: 'sponsor-updates' as never, id: update.id, data: { subject: 'Changed' } as never, ...as }), label).rejects.toThrow()
+      })
+    }
+    expect(await saved('sponsors', sponsor.id)).toMatchObject({ name: 'Exact Yes' })
+    expect(await saved('sponsor-tiers', tier.id)).toMatchObject({ name: 'Exact Tier' })
+    expect(await saved('sponsor-updates', update.id)).toMatchObject({ subject: 'Exact' })
+    // Exactly true: every row, contacts included, and writes go through.
+    await answering('canManage', () => true, async () => {
+      const seen = await payload.find({ collection: 'sponsors' as never, pagination: false, ...as })
+      expect(seen.docs.map((d: Doc) => d.name)).toContain('Not yet')
+      expect(JSON.stringify(seen.docs)).toContain('exact@yes.example')
+      await payload.update({ collection: 'sponsor-tiers' as never, id: tier.id, data: { name: 'Exact Tier 2' } as never, ...as })
+      expect((await payload.find({ collection: 'sponsor-updates' as never, ...as })).docs.length).toBeGreaterThan(0)
+    })
+    expect(await saved('sponsor-tiers', tier.id)).toMatchObject({ name: 'Exact Tier 2' })
+  })
+
+  it('answers send, recipients, archive and recover with 403 (never a 500) for anything but true, changing nothing', async () => {
+    const { sendEndpoint: send, recipientsEndpoint: recipients, archiveEndpoint: archive, recoverEndpoint: recover } = await import('../src/endpoints.js')
+    const update = (await payload.create({ collection: 'sponsor-updates' as never, data: { subject: 'Exact send', body: lexical('x'), recipients: { sponsors: [sponsor.id] } } as never })) as Doc
+    mail.length = 0
+    for (const [label, answer] of noes) {
+      await answering('canManage', answer, async () => {
+        for (const [endpoint, id] of [[send, update.id], [recipients, update.id], [archive, sponsor.id], [recover, update.id]] as const) {
+          await expect(call(endpoint, id, { archived: true }), `${label} ${endpoint.path}`).rejects.toMatchObject({ status: 403 })
+        }
+      })
+    }
+    expect(mail).toEqual([])
+    expect(await saved('sponsor-updates', update.id)).toMatchObject({ status: 'draft' })
+    expect((await saved('sponsors', sponsor.id)).archivedAt).toBeFalsy()
+    // Exactly true: each goes through.
+    await answering('canManage', () => true, async () => {
+      expect(await (await call(recipients, update.id)).json()).toMatchObject({ sponsors: 1, contacts: 1 })
+      expect((await call(archive, sponsor.id, { archived: false })).status).toBe(200)
+      await expect(call(recover, update.id)).rejects.toMatchObject({ status: 409 }) // allowed in; nothing to recover
+      expect(await (await call(send, update.id)).json()).toMatchObject({ status: 'sent', sent: 1 })
+    })
+    expect(mail.map((m) => m.to)).toEqual(['exact@yes.example'])
+  })
+
+  it('sends nothing unless canSend answers exactly true; an error there is a 400, not a 500', async () => {
+    const { sendEndpoint: send } = await import('../src/endpoints.js')
+    const update = (await payload.create({ collection: 'sponsor-updates' as never, data: { subject: 'Exact canSend', body: lexical('x'), recipients: { sponsors: [sponsor.id] } } as never })) as Doc
+    mail.length = 0
+    for (const [label, answer] of noes) {
+      await answering('canSend', answer, async () => {
+        await expect(call(send, update.id), label).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/turned off/) })
+        await expect(sendUpdate(payload, String(update.id)), label).rejects.toThrow(/turned off/)
+      })
+    }
+    expect(mail).toEqual([])
+    expect(await saved('sponsor-updates', update.id)).toMatchObject({ status: 'draft' })
+    await answering('canSend', () => true, async () => {
+      expect(await (await call(send, update.id)).json()).toMatchObject({ status: 'sent', sent: 1 })
+    })
+    expect(mail).toHaveLength(1)
+  })
+
+  it('shows the admin overview and its nav link only for an exact true', async () => {
+    for (const [label, answer] of noes) {
+      await answering('canManage', answer, async () => {
+        const html = await view(admin)
+        expect(html, label).toContain('You don’t have access to sponsors.')
+        expect(html, label).not.toContain('Exact Yes')
+        expect(await navLink(admin), label).toBeNull()
+      })
+    }
+    // No one signed in: no, without asking the site.
+    await answering('canManage', () => true, async () => {
+      expect(await view(null)).toContain('You don’t have access')
+      expect(await navLink(null)).toBeNull()
+      const html = await view(admin)
+      expect(html).toContain('Exact Yes')
+      expect(html).not.toContain('You don’t have access')
+      expect(await navLink(admin)).not.toBeNull()
+    })
   })
 })

@@ -2,6 +2,7 @@ import { DefaultTemplate } from '@payloadcms/next/templates'
 import type { AdminViewServerProps, CollectionSlug } from 'payload'
 import React from 'react'
 
+import { isManager } from '../access.js'
 import { sponsorsOf } from '../api.js'
 import { ArchiveButton } from '../client/SendUpdateButton.js'
 
@@ -11,7 +12,7 @@ type Row = { id: string; name: string; listed?: boolean; archivedAt?: string | n
 export async function SponsorsView({ initPageResult, params, searchParams }: AdminViewServerProps) {
   const { req, permissions, visibleEntities, locale } = initPageResult
   const o = sponsorsOf(req.payload)
-  const allowed = Boolean(req.user) && (await o.canManage({ req }))
+  const allowed = await isManager(o, req)
   const admin = req.payload.config.routes.admin
   const apiBase = `${req.payload.config.serverURL ?? ''}${req.payload.config.routes.api}/${o.sponsors}`
   const docs = allowed
@@ -88,7 +89,7 @@ export async function SponsorsView({ initPageResult, params, searchParams }: Adm
 /** Nav link to the overview, for people who manage sponsors. */
 export async function SponsorsNavLink({ payload, user }: { payload: import('payload').Payload; user?: unknown }) {
   const o = sponsorsOf(payload)
-  if (!user || !(await o.canManage({ req: { user, payload } as never }))) return null
+  if (!(await isManager(o, { user, payload } as never))) return null
   return (
     <a className="nav__link" href={`${payload.config.routes.admin}/sponsors`} style={{ display: 'block', marginTop: 'calc(var(--base) / 2)' }}>
       <span className="nav__link-label">Sponsors</span>
