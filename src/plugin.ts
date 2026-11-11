@@ -1,7 +1,7 @@
 import type { Config, Plugin } from 'payload'
 
 import { sponsorsCollection, tiersCollection, updatesCollection } from './collections.js'
-import { archiveEndpoint, optOutEndpoint, recipientsEndpoint, sendEndpoint } from './endpoints.js'
+import { archiveEndpoint, optOutEndpoint, recipientsEndpoint, recoverEndpoint, sendEndpoint } from './endpoints.js'
 import type { ResolvedSponsors, SponsorsPluginOptions } from './types.js'
 
 /**
@@ -14,6 +14,8 @@ import type { ResolvedSponsors, SponsorsPluginOptions } from './types.js'
 export const sponsorsPlugin =
   (options: SponsorsPluginOptions = {}): Plugin =>
   (config: Config): Config => {
+    const stale = options.staleSendMinutes ?? 30
+    if (typeof stale !== 'number' || !Number.isFinite(stale) || stale <= 0) throw new Error('sponsorsPlugin: staleSendMinutes must be a positive number of minutes.')
     const o: ResolvedSponsors = {
       sponsors: options.slugs?.sponsors ?? 'sponsors',
       tiers: options.slugs?.tiers === false ? false : (options.slugs?.tiers ?? 'sponsor-tiers'),
@@ -27,10 +29,11 @@ export const sponsorsPlugin =
       publicURL: options.publicURL,
       adminView: options.adminView ?? true,
       scopeField: options.scopeField,
+      staleSendMinutes: stale,
     }
     const userSlug = config.admin?.user ?? 'users'
     const sponsors = { ...sponsorsCollection(o), endpoints: [optOutEndpoint, archiveEndpoint] }
-    const updates = { ...updatesCollection(o, userSlug), endpoints: [recipientsEndpoint, sendEndpoint] }
+    const updates = { ...updatesCollection(o, userSlug), endpoints: [recipientsEndpoint, sendEndpoint, recoverEndpoint] }
     const added = [
       options.overrides?.sponsors ? options.overrides.sponsors(sponsors) : sponsors,
       ...(o.tiers ? [options.overrides?.tiers ? options.overrides.tiers(tiersCollection({ ...o, tiers: o.tiers })) : tiersCollection({ ...o, tiers: o.tiers })] : []),

@@ -29,6 +29,11 @@ export type SponsorsPluginOptions = {
   adminView?: boolean
   /** A field that separates owners (e.g. `tenant` with multi-tenancy): new sponsors are placed alphabetically among their own. */
   scopeField?: string
+  /**
+   * Minutes without progress after which an update still marked "sending" counts as stuck
+   * (the server stopped mid-send) and a manager may recover it. Default 30.
+   */
+  staleSendMinutes?: number
 }
 
 export type ResolvedSponsors = {
@@ -44,6 +49,7 @@ export type ResolvedSponsors = {
   publicURL?: string
   adminView: boolean
   scopeField?: string
+  staleSendMinutes: number
 }
 
 /** A listing created by another plugin (e.g. memberships): identified by `source` + `externalRef`. */

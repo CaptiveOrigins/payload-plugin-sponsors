@@ -1,10 +1,19 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
 
-import { deliveryKey, optOut, recipientsOf, sendUpdate, setArchived, sponsorsOf } from './api.js'
+import { deliveryKey, isStuck, optOut, recipientsOf, recoverSend, sendUpdate, setArchived, sponsorsOf } from './api.js'
 
 const allowed = async (req: PayloadRequest) => {
   if (!req.user) throw new APIError('Sign in first.', 401, undefined, true)
   if (!(await sponsorsOf(req.payload).canManage({ req }))) throw new APIError('Not allowed.', 403, undefined, true)
+}
+
+/** Managers only, and only an exact `true` from `canManage` counts (a truthy value or an error is a no). */
+const managerExactly = async (req: PayloadRequest) => {
+  if (!req.user) throw new APIError('Sign in first.', 401, undefined, true)
+  const yes = await Promise.resolve()
+    .then(() => sponsorsOf(req.payload).canManage({ req }))
+    .catch(() => false)
+  if (yes !== true) throw new APIError('Not allowed.', 403, undefined, true)
 }
 
 /** GET /api/<updates>/:id/recipients: who an update would reach (for the confirm dialog). */
@@ -21,7 +30,8 @@ export const recipientsEndpoint: Endpoint = {
     const delivered = new Set(Array.isArray(saved) ? saved : [])
     const remaining = (s: (typeof sponsors)[number]) => (s.contacts ?? []).filter((c) => c.email && !c.optedOut && !delivered.has(deliveryKey(req.payload, String(s.id), c.email)))
     const contacts = sponsors.reduce((n, s) => n + remaining(s).length, 0)
-    return Response.json({ sponsors: sponsors.length, contacts, status: (update as { status?: string }).status ?? 'draft' })
+    // `stuck`: still marked sending, but the send stopped (no progress for `staleSendMinutes`).
+    return Response.json({ sponsors: sponsors.length, contacts, status: (update as { status?: string }).status ?? 'draft', stuck: isStuck(req.payload, update as never) })
   },
 }
 
@@ -35,6 +45,23 @@ export const sendEndpoint: Endpoint = {
       return Response.json(await sendUpdate(req.payload, String(req.routeParams?.id), req.user?.id))
     } catch (error) {
       throw new APIError((error as Error).message, 400, undefined, true)
+    }
+  },
+}
+
+/**
+ * POST /api/<updates>/:id/recover: for a send that stopped mid-way (the update is stuck in
+ * "sending"), mark it partly sent or failed from the recorded deliveries. Managers only.
+ */
+export const recoverEndpoint: Endpoint = {
+  path: '/:id/recover',
+  method: 'post',
+  handler: async (req) => {
+    await managerExactly(req)
+    try {
+      return Response.json(await recoverSend(req.payload, String(req.routeParams?.id)))
+    } catch (error) {
+      throw new APIError((error as Error).message, 409, undefined, true)
     }
   },
 }

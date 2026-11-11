@@ -18,8 +18,16 @@ private contacts, and **sponsor updates written and sent from the admin**.
 - **When a send doesn't finish**: if a delivery fails, or something breaks partway, the update is
   marked **Partly sent** (or **Failed** if nobody got it) and the report says so. Sending it again
   reaches only the contacts who haven't had it; nobody gets it twice. The update remembers who
-  had it as keyed hashes, not addresses. If the server itself stops mid-send, the update stays
-  **Sending**; that case has no automatic way out yet.
+  had it as keyed hashes, not addresses.
+- **When the server stops mid-send**: the update stays **Sending**. A send records each email
+  as it goes and refreshes a timestamp before each one, so after 30 minutes with no progress
+  (`staleSendMinutes`) the update's sidebar says "Sending stopped: recover it to finish", with a
+  **Recover** button. No background job is involved; the check runs when the page loads.
+  Recovering marks it **Partly sent**, or **Failed** if nobody had it yet, and sending it again
+  reaches only the rest. A send that is still making progress can't be recovered, two
+  recoveries at once give one winner, and a send that wakes up after being recovered stops
+  without emailing anyone else. One limit: if the server stops just after an email goes out
+  but before it is recorded, that one contact can get the update twice.
 - **Archive first**: archiving hides a sponsor from the public page and from updates while
   keeping their history; restore any time. Deleting stays available for mistakes.
 - **Overview** at `/admin/sponsors`: logos by tier, add, archive/restore, email sponsors.
@@ -82,6 +90,14 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 | `overrides` | | Adjust the generated collections (e.g. multi-tenant fields) |
 | `adminView` | `true` | The `/admin/sponsors` overview and nav link |
 | `scopeField` | | Field separating owners (e.g. `tenant`): new sponsors are placed A–Z among their own |
+| `staleSendMinutes` | `30` | Minutes without progress before a send counts as stopped and can be recovered |
+
+## Recovering a stopped send
+
+From the update's sidebar, or `POST /api/sponsor-updates/:id/recover` (managers only: `canManage`
+must return exactly `true`). In server code, `recoverSend(payload, id)` does the same without the
+access check, and `isStuck(payload, update)` says whether an update can be recovered. Updates left
+in **Sending** by 0.3.1 have no progress timestamp; they count from their last change instead.
 
 ## Upgrading from 0.1
 

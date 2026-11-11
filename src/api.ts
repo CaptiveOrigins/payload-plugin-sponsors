@@ -133,6 +133,8 @@ export type SendReport = {
   failed: number
   alreadySent: number
   stoppedEarly?: boolean
+  /** Set by `recoverSend`: the server stopped mid-send; `sent` counts everyone recorded as having it. */
+  recovered?: boolean
 }
 
 /** Statuses an update may be sent from: a draft, or a send that didn't reach everyone. */
@@ -144,6 +146,25 @@ export const sendableStatuses = ['draft', 'partial', 'failed'] as const
  */
 export const deliveryKey = (payload: Payload, sponsorId: string, email: string) =>
   crypto.createHmac('sha256', payload.secret).update(`sponsors-delivered:${JSON.stringify([sponsorId, email.toLowerCase()])}`).digest('base64url')
+
+type LeaseDoc = { status?: string | null; sendingSince?: string | null; claimId?: string | null; updatedAt?: string | null }
+
+/**
+ * Whether an update marked "sending" is stuck: no progress for `staleSendMinutes`.
+ * A send refreshes `sendingSince` before every email, so a live send never looks stuck.
+ * Updates claimed before `sendingSince` existed (0.3.1) fall back to `updatedAt`.
+ */
+export function isStuck(payload: Payload, update: LeaseDoc, now = Date.now()): boolean {
+  if (update.status !== 'sending') return false
+  const since = Date.parse(update.sendingSince ?? update.updatedAt ?? '')
+  // An unreadable lease can't be shown to be stale, so it isn't.
+  if (Number.isNaN(since)) return false
+  return now - since > sponsorsOf(payload).staleSendMinutes * 60_000
+}
+
+/** `field` still holds `value` (or is still empty). */
+const still = (field: string, value: string | null | undefined): Where =>
+  value == null ? { or: [{ [field]: { exists: false } }, { [field]: { equals: null } }] } : { [field]: { equals: value } }
 
 /** The current sponsors an update goes to (all, or the chosen sponsors and tiers). */
 export async function recipientsOf(payload: Payload, update: { recipients?: { all?: boolean | null; sponsors?: unknown[] | null; tiers?: unknown[] | null } | null }) {
@@ -199,38 +220,66 @@ export async function sendUpdate(payload: Payload, updateId: string, userId?: st
     subject: string
     body: unknown
     status?: string
+    sendingSince?: string | null
+    claimId?: string | null
+    updatedAt?: string | null
     delivered?: unknown
     recipients?: { all?: boolean; sponsors?: unknown[]; tiers?: unknown[] }
   }
   const read = async () => (await payload.findByID({ collection: o.updates as CollectionSlug, id: updateId, depth: 0, overrideAccess: true })) as unknown as UpdateDoc
-  const refusal = (status?: string) => new Error(status === 'sending' ? 'This update is already sending.' : 'This update was already sent.')
+  const refusal = (doc: UpdateDoc) =>
+    new Error(
+      doc.status !== 'sending'
+        ? 'This update was already sent.'
+        : isStuck(payload, doc)
+          ? 'Sending stopped before it finished: recover it, then send it again to reach the rest.'
+          : 'This update is already sending.',
+    )
   const first = await read()
-  if (!sendableStatuses.includes((first.status ?? 'draft') as never)) throw refusal(first.status)
+  if (!sendableStatuses.includes((first.status ?? 'draft') as never)) throw refusal(first)
   const sponsors = await recipientsOf(payload, first)
   if (!sponsors.length) throw new Error('Choose at least one sponsor or tier (or all current sponsors).')
-  // Claim it in one conditional write: only one send can move it to "sending".
+  // Claim it in one conditional write: only one send can move it to "sending". The claim
+  // carries its own id and a lease (`sendingSince`) that the send refreshes as it goes.
+  const claimId = crypto.randomUUID()
   const claimed = await payload.db.updateOne({
     collection: o.updates as CollectionSlug,
     where: { and: [{ id: { equals: updateId } }, { status: { in: [...sendableStatuses] } }] },
-    data: { status: 'sending' },
+    data: { status: 'sending', claimId, sendingSince: new Date().toISOString() },
   })
-  if (!claimed) throw refusal((await read()).status)
+  if (!claimed) throw refusal(await read())
+  const ours: Where = { and: [{ id: { equals: updateId } }, { status: { equals: 'sending' } }, { claimId: { equals: claimId } }] }
+  /** Still ours? Refresh the lease and record who has it so far, in one conditional write. */
+  const renew = async () =>
+    Boolean(
+      await payload.db.updateOne({
+        collection: o.updates as CollectionSlug,
+        where: ours,
+        data: { sendingSince: new Date().toISOString(), delivered: [...delivered] },
+      }),
+    )
+  let lost = false
 
   const report: SendReport = { status: 'sent', sponsors: [], sent: 0, skipped: 0, failed: 0, alreadySent: 0 }
   const now = new Date().toISOString()
   let delivered = new Set<string>()
   // Whatever happens after the claim, record who got it, so a resend reaches only the rest.
+  // Only while the claim is still ours: after a recovery, this send writes nothing.
   const finish = async (stoppedEarly: boolean) => {
     for (const k of ['sent', 'skipped', 'failed', 'alreadySent'] as const) report[k] = report.sponsors.reduce((n, r) => n + r[k], 0)
     if (stoppedEarly) report.stoppedEarly = true
     report.status = !stoppedEarly && !report.failed ? 'sent' : delivered.size ? 'partial' : 'failed'
-    await payload.update({
-      collection: o.updates as CollectionSlug,
-      id: updateId,
-      data: { status: report.status, sentAt: now, sentBy: userId ?? null, report, delivered: [...delivered] } as never,
-      overrideAccess: true,
-    })
+    if (lost) return false
+    return Boolean(
+      await payload.db.updateOne({
+        collection: o.updates as CollectionSlug,
+        where: ours,
+        data: { status: report.status, sentAt: now, sentBy: userId ?? null, report, delivered: [...delivered], claimId: null, sendingSince: null },
+      }),
+    )
   }
+  const takenOver = () =>
+    new Error(`This send was recovered while it ran, so it stopped. ${delivered.size} contact${delivered.size === 1 ? ' has' : 's have'} it so far; send it again to reach only the rest.`)
   try {
     const update = await read()
     delivered = new Set(Array.isArray(update.delivered) ? update.delivered.filter((k): k is string => typeof k === 'string') : [])
@@ -256,6 +305,11 @@ export async function sendUpdate(payload: Payload, updateId: string, userId?: st
         const withFooter = `${html}<hr><p style="font-size:12px;color:#666">You receive these updates as a contact for ${escapeHtml(s.name)}. <a href="${link}">Stop these updates</a>.</p>`
         const text = `${textOf(html)}\n\n—\nYou receive these updates as a contact for ${s.name}. Stop these updates: ${link}`
         const finished = o.renderEmail ? o.renderEmail({ subject: update.subject, html: withFooter, text, sponsorName: s.name }) : { html: withFooter, text }
+        // Before each email: still ours? (A recovered send stops here, emailing no one else.)
+        if (!(await renew())) {
+          lost = true
+          throw takenOver()
+        }
         try {
           await deliver({ payload, to: c.email, subject: update.subject, html: finished.html, text: finished.text, replyTo: o.replyTo })
           delivered.add(key)
@@ -269,7 +323,10 @@ export async function sendUpdate(payload: Payload, updateId: string, userId?: st
         await payload.update({ collection: o.sponsors as CollectionSlug, id: s.id, data: { lastUpdateAt: now } as never, overrideAccess: true, context: { sponsorsInternal: true } })
     }
   } catch (err) {
-    await finish(true)
+    if (!(await finish(true))) {
+      payload.logger.warn({ err, update: updateId }, 'Sponsors: a send stopped after it was recovered elsewhere')
+      throw lost ? err : takenOver()
+    }
     payload.logger.error({ err, update: updateId, sent: report.sent }, 'Sponsors: sending stopped partway')
     const n = delivered.size
     throw new Error(
@@ -277,7 +334,58 @@ export async function sendUpdate(payload: Payload, updateId: string, userId?: st
       { cause: err },
     )
   }
-  await finish(false)
+  if (!(await finish(false))) throw takenOver()
   payload.logger.info({ update: updateId, status: report.status, sent: report.sent, skipped: report.skipped, failed: report.failed }, 'Sponsors: update sent')
+  return report
+}
+
+/**
+ * Recovers an update stuck in "sending" (the server stopped mid-send): marks it
+ * partly sent, or failed if nobody has it yet, from the deliveries the send
+ * recorded. Sending it again then reaches only those who haven't had it.
+ *
+ * Refuses an update that isn't stuck (see `isStuck`). The takeover is one
+ * conditional write on the same claim and lease it found stale, so it can't
+ * race a send that is still going, or another recovery: one wins.
+ * No access check here; the endpoint allows managers only.
+ */
+export async function recoverSend(payload: Payload, updateId: string): Promise<SendReport> {
+  const o = sponsorsOf(payload)
+  const found = (await payload.findByID({ collection: o.updates as CollectionSlug, id: updateId, depth: 0, overrideAccess: true })) as unknown as LeaseDoc & {
+    delivered?: unknown
+    recipients?: { all?: boolean; sponsors?: unknown[]; tiers?: unknown[] }
+  }
+  if (found.status !== 'sending') throw new Error('This update isn’t sending, so there’s nothing to recover.')
+  if (!isStuck(payload, found)) throw new Error(`This update is still sending. It can be recovered once it has made no progress for ${o.staleSendMinutes} minutes.`)
+  const delivered = new Set(Array.isArray(found.delivered) ? found.delivered.filter((k): k is string => typeof k === 'string') : [])
+  // The report counts who has it per sponsor (never addresses), from the recorded deliveries.
+  const report: SendReport = { status: delivered.size ? 'partial' : 'failed', sponsors: [], sent: 0, skipped: 0, failed: 0, alreadySent: 0, stoppedEarly: true, recovered: true }
+  for (const s of await recipientsOf(payload, found)) {
+    const row = { id: String(s.id), name: s.name, sent: 0, skipped: 0, failed: 0, alreadySent: 0 }
+    for (const c of s.contacts ?? []) {
+      if (c.email && delivered.has(deliveryKey(payload, String(s.id), c.email))) row.sent++
+      else if (c.optedOut || !c.email) row.skipped++
+    }
+    report.sponsors.push(row)
+  }
+  report.skipped = report.sponsors.reduce((n, r) => n + r.skipped, 0)
+  report.sent = delivered.size
+  const where: Where = {
+    and: [
+      { id: { equals: updateId } },
+      { status: { equals: 'sending' } },
+      still('claimId', found.claimId),
+      still('sendingSince', found.sendingSince),
+      // Claimed before the lease existed: the last write must be the one found stale.
+      ...(found.sendingSince == null ? [still('updatedAt', found.updatedAt)] : []),
+    ],
+  }
+  const taken = await payload.db.updateOne({
+    collection: o.updates as CollectionSlug,
+    where,
+    data: { status: report.status, report, delivered: [...delivered], claimId: null, sendingSince: null },
+  })
+  if (!taken) throw new Error('This update changed while recovering it (it was recovered already, or the send is still going). Reload to see where it stands.')
+  payload.logger.warn({ update: updateId, status: report.status, sent: report.sent }, 'Sponsors: recovered a send that stopped partway')
   return report
 }

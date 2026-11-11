@@ -196,6 +196,15 @@ export function updatesCollection(o: ResolvedSponsors, userSlug: string): Collec
           { name: 'sentAt', type: 'date', admin: { readOnly: true, date: { pickerAppearance: 'dayAndTime' } } },
         ],
       },
+      // The send's lease: set when a send claims the update and refreshed before each email. If it
+      // goes stale while "sending", the server stopped mid-send and a manager can recover it.
+      {
+        name: 'sendingSince',
+        label: 'Last sending progress',
+        type: 'date',
+        admin: { position: 'sidebar', readOnly: true, date: { pickerAppearance: 'dayAndTime' }, condition: (d) => d?.status === 'sending' },
+      },
+      { name: 'claimId', type: 'text', admin: { hidden: true, readOnly: true } },
       { name: 'sentBy', type: 'relationship', relationTo: userSlug as never, admin: { position: 'sidebar', readOnly: true } },
       { name: 'report', type: 'json', admin: { position: 'sidebar', readOnly: true, description: 'Sponsors and counts (no addresses).' } },
       // Keyed hashes of the contacts already reached (no addresses), so a resend never emails anyone twice.

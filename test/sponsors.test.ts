@@ -7,8 +7,8 @@ import { buildConfig, getPayload, type Payload } from 'payload'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { sponsorsOf } from '../src/api.js'
-import { archiveEndpoint, optOutEndpoint, recipientsEndpoint, sendEndpoint } from '../src/endpoints.js'
-import { getSponsors, optOut, optOutToken, retireListing, sendUpdate, setArchived, sponsorsPlugin, upsertListing } from '../src/index.js'
+import { archiveEndpoint, optOutEndpoint, recipientsEndpoint, recoverEndpoint, sendEndpoint } from '../src/endpoints.js'
+import { getSponsors, optOut, optOutToken, recoverSend, retireListing, sendUpdate, setArchived, sponsorsPlugin, upsertListing } from '../src/index.js'
 
 let payload: Payload
 let mongo: MongoMemoryReplSet
@@ -339,5 +339,207 @@ describe('refusals and failures (test audit 2026-11-10)', () => {
     expect(after.map((c: Doc) => [c.email, Boolean(c.optedOut)])).toEqual(before.map((c: Doc) => [c.email, Boolean(c.optedOut)]))
     const res = await (optOutEndpoint.handler as (r: unknown) => Promise<Response>)({ payload, searchParams: new URLSearchParams({ t: forged }) })
     expect(res.status).toBe(400)
+  })
+})
+
+
+describe('a send the server stopped (recovery, 2026-11-11)', () => {
+  const asUser = (u: Doc) => ({ ...u, collection: 'users' })
+  const findSponsor = async (name: string) => (await payload.find({ collection: 'sponsors' as never, where: { name: { equals: name } }, depth: 0 })).docs[0] as Doc
+  const draftUpdate = (recipients: Doc, subject: string) => payload.create({ collection: 'sponsor-updates' as never, data: { subject, body: lexical('Recovery body'), recipients } as never }) as Promise<Doc>
+  const saved = async (id: unknown) => (await payload.findByID({ collection: 'sponsor-updates' as never, id: id as string, depth: 0 })) as Doc
+  // Where the update is stored, to play a dead server: backdate the lease, or leave a send claimed.
+  // (timestamps off, so a backdated `updatedAt` stays backdated)
+  const model = () => (payload.db as unknown as { collections: Record<string, { updateOne: (f: object, u: object, o: object) => Promise<unknown> }> }).collections['sponsor-updates']!
+  const raw = () => ({ updateOne: (f: object, u: object) => model().updateOne(f, u, { timestamps: false }) })
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000)
+  const call = (endpoint: typeof recoverEndpoint, user: Doc | null, id: unknown) =>
+    (endpoint.handler as (r: unknown) => Promise<Response>)({ user: user ? asUser(user) : null, payload, routeParams: { id: String(id) } })
+  let member: Doc
+  let ids: unknown[]
+
+  beforeAll(async () => {
+    member = (await payload.find({ collection: 'users', where: { email: { equals: 'member@example.org' } } })).docs[0] as Doc
+    await payload.create({ collection: 'sponsors' as never, data: { name: 'Stop One', listed: true, contacts: [{ email: 'a@stop.example' }, { email: 'b@stop.example' }] } as never })
+    await payload.create({ collection: 'sponsors' as never, data: { name: 'Stop Two', listed: true, contacts: [{ email: 'c@stop.example' }] } as never })
+    ids = [(await findSponsor('Stop One')).id, (await findSponsor('Stop Two')).id]
+  })
+
+  /** A delivery to `to` that hangs until released, as on a server that has stopped. */
+  const hangOn = (to: string) => {
+    const o = sponsorsOf(payload)
+    const original = o.sendEmail!
+    let fail!: (e: Error) => void
+    let reached!: () => void
+    const atHang = new Promise<void>((r) => (reached = r))
+    let hung = false
+    o.sendEmail = async (args) => {
+      if (args.to === to && !hung) {
+        hung = true
+        reached()
+        return new Promise<void>((_, reject) => (fail = reject))
+      }
+      await original(args)
+    }
+    return { atHang, release: () => fail(new Error('connection reset')), restore: () => (o.sendEmail = original) }
+  }
+
+  it('recovers a stale send to partly sent; sending again reaches only the rest, and nobody gets it twice', async () => {
+    const update = await draftUpdate({ sponsors: ids }, 'Stopped update')
+    const hang = hangOn('b@stop.example')
+    const warn = payload.logger.warn
+    payload.logger.warn = (() => undefined) as never
+    mail.length = 0
+    try {
+      // The send reaches a, then hangs on b: to everyone else it looks like a server that stopped.
+      const stopped = sendUpdate(payload, String(update.id)).then(
+        () => null,
+        (e: Error) => e,
+      )
+      await hang.atHang
+      const during = await saved(update.id)
+      expect(during).toMatchObject({ status: 'sending' })
+      expect(during.claimId).toEqual(expect.any(String))
+      expect(Date.now() - Date.parse(during.sendingSince)).toBeLessThan(60_000)
+      expect(during.delivered).toHaveLength(1) // a, recorded before b was tried
+      expect(mail.map((m) => m.to)).toEqual(['a@stop.example'])
+
+      // Fresh: not stuck, can't be recovered, can't be sent.
+      expect(await (await call(recipientsEndpoint as never, admin, update.id)).json()).toMatchObject({ status: 'sending', stuck: false })
+      await expect(call(recoverEndpoint, admin, update.id)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/still sending/) })
+      await expect(recoverSend(payload, String(update.id))).rejects.toThrow(/still sending/)
+      await expect(sendUpdate(payload, String(update.id))).rejects.toThrow('This update is already sending.')
+      expect((await saved(update.id)).status).toBe('sending')
+
+      // 31 minutes without progress: stuck. The admin shows it, and sending says to recover first.
+      await raw().updateOne({ _id: update.id }, { $set: { sendingSince: minutesAgo(31) } })
+      expect(await (await call(recipientsEndpoint as never, admin, update.id)).json()).toMatchObject({ status: 'sending', stuck: true, contacts: 2 })
+      await expect(sendUpdate(payload, String(update.id))).rejects.toThrow(/recover it/)
+
+      const res = await call(recoverEndpoint, admin, update.id)
+      const report = await res.json()
+      expect(report).toMatchObject({ status: 'partial', sent: 1, recovered: true, stoppedEarly: true })
+      expect(report.sponsors).toEqual([expect.objectContaining({ name: 'Stop One', sent: 1 }), expect.objectContaining({ name: 'Stop Two', sent: 0 })])
+      const after = await saved(update.id)
+      expect(after).toMatchObject({ status: 'partial', report: { status: 'partial', recovered: true } })
+      expect(after.claimId ?? null).toBeNull()
+      expect(after.sendingSince ?? null).toBeNull()
+      expect(JSON.stringify(after)).not.toContain('@')
+      await expect(call(recoverEndpoint, admin, update.id)).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/nothing to recover/) })
+
+      // Sending again reaches b and c only.
+      expect(await sendUpdate(payload, String(update.id), admin.id)).toMatchObject({ status: 'sent', sent: 2, alreadySent: 1, failed: 0 })
+      const done = await saved(update.id)
+      expect(done).toMatchObject({ status: 'sent', sentBy: admin.id })
+      expect(done.claimId ?? null).toBeNull()
+
+      // The old send wakes up: it notices it was recovered and emails no one else (c comes after b).
+      hang.release()
+      expect(((await stopped) as Error).message).toMatch(/recovered while it ran/)
+      expect(mail.map((m) => m.to).sort()).toEqual(['a@stop.example', 'b@stop.example', 'c@stop.example'])
+      expect(await saved(update.id)).toMatchObject({ status: 'sent', report: { status: 'sent' } })
+    } finally {
+      hang.restore()
+      payload.logger.warn = warn
+    }
+  })
+
+  it('lets an old send that wakes after its last email overwrite nothing', async () => {
+    const update = await draftUpdate({ sponsors: [ids[1]] }, 'Stopped on the last one')
+    const hang = hangOn('c@stop.example')
+    const warn = payload.logger.warn
+    payload.logger.warn = (() => undefined) as never
+    mail.length = 0
+    try {
+      const stopped = sendUpdate(payload, String(update.id)).then(
+        () => null,
+        (e: Error) => e,
+      )
+      await hang.atHang
+      await raw().updateOne({ _id: update.id }, { $set: { sendingSince: minutesAgo(31) } })
+      expect(await recoverSend(payload, String(update.id))).toMatchObject({ status: 'failed', sent: 0 })
+      expect(await sendUpdate(payload, String(update.id))).toMatchObject({ status: 'sent', sent: 1 })
+      hang.release()
+      expect(((await stopped) as Error).message).toMatch(/recovered while it ran/)
+      expect(await saved(update.id)).toMatchObject({ status: 'sent', report: { status: 'sent', sent: 1 } })
+      expect(mail.map((m) => m.to)).toEqual(['c@stop.example'])
+    } finally {
+      hang.restore()
+      payload.logger.warn = warn
+    }
+  })
+
+  it('recovers a send claimed before the lease existed (0.3.1) by its last write, as failed when nobody had it', async () => {
+    const update = await draftUpdate({ sponsors: [ids[1]] }, 'Stuck since 0.3.1')
+    await raw().updateOne({ _id: update.id }, { $set: { status: 'sending', updatedAt: minutesAgo(45) }, $unset: { sendingSince: 1, claimId: 1 } })
+    expect(await (await call(recipientsEndpoint as never, admin, update.id)).json()).toMatchObject({ stuck: true })
+    expect(await recoverSend(payload, String(update.id))).toMatchObject({ status: 'failed', sent: 0, recovered: true })
+    expect((await saved(update.id)).status).toBe('failed')
+    mail.length = 0
+    expect(await sendUpdate(payload, String(update.id))).toMatchObject({ status: 'sent', sent: 1 })
+    expect(mail.map((m) => m.to)).toEqual(['c@stop.example'])
+  })
+
+  it('gives one winner when two recoveries start together', async () => {
+    const update = await draftUpdate({ sponsors: ids }, 'Two recoveries')
+    await raw().updateOne({ _id: update.id }, { $set: { status: 'sending', claimId: 'dead-claim', sendingSince: minutesAgo(40), delivered: [] } })
+    const results = await Promise.allSettled([recoverSend(payload, String(update.id)), recoverSend(payload, String(update.id))])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const lost = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    expect(lost).toHaveLength(1)
+    expect(lost[0]!.reason.message).toMatch(/changed while recovering/)
+    expect((await saved(update.id)).status).toBe('failed')
+  })
+
+  it('loses to a send that moves on between the stale check and the takeover', async () => {
+    // Each change lands just before the recovery's write: progress, a new claim, or (before the lease) any write.
+    const cases = [
+      { start: { claimId: 'slow-claim', sendingSince: minutesAgo(40) }, meanwhile: { sendingSince: new Date() } },
+      { start: { claimId: 'slow-claim', sendingSince: minutesAgo(40) }, meanwhile: { claimId: 'another-claim' } },
+      { start: { updatedAt: minutesAgo(40) }, meanwhile: { updatedAt: new Date() } },
+    ]
+    const db = payload.db as unknown as { updateOne: (args: { data?: { report?: { recovered?: boolean } } }) => Promise<unknown> }
+    const original = db.updateOne
+    try {
+      for (const { start, meanwhile } of cases) {
+        const update = await draftUpdate({ sponsors: ids }, 'Raced recovery')
+        await raw().updateOne({ _id: update.id }, { $set: { status: 'sending', delivered: [], ...start }, $unset: 'claimId' in start ? {} : { claimId: 1, sendingSince: 1 } })
+        db.updateOne = async function (this: unknown, args) {
+          if (args.data?.report?.recovered) await raw().updateOne({ _id: update.id }, { $set: meanwhile })
+          return original.call(this, args)
+        }
+        await expect(recoverSend(payload, String(update.id))).rejects.toThrow(/changed while recovering/)
+        db.updateOne = original
+        expect([meanwhile, (await saved(update.id)).status]).toEqual([meanwhile, 'sending'])
+      }
+    } finally {
+      db.updateOne = original
+    }
+  })
+
+  it('refuses recovery to anonymous visitors, non-managers and anything but an exact yes, changing nothing', async () => {
+    const update = await draftUpdate({ sponsors: ids }, 'Refused recovery')
+    await raw().updateOne({ _id: update.id }, { $set: { status: 'sending', claimId: 'dead-claim', sendingSince: minutesAgo(40), delivered: [] } })
+    await expect(call(recoverEndpoint, null, update.id)).rejects.toMatchObject({ status: 401 })
+    await expect(call(recoverEndpoint, member, update.id)).rejects.toMatchObject({ status: 403 })
+    const o = sponsorsOf(payload)
+    const canManage = o.canManage
+    try {
+      for (const answer of [1, 'yes', {}, Promise.reject(new Error('directory down'))]) {
+        o.canManage = (() => answer) as never
+        await expect(call(recoverEndpoint, admin, update.id)).rejects.toMatchObject({ status: 403 })
+      }
+    } finally {
+      o.canManage = canManage
+    }
+    expect(await saved(update.id)).toMatchObject({ status: 'sending', claimId: 'dead-claim' })
+    // A manager can.
+    expect(await (await call(recoverEndpoint, admin, update.id)).json()).toMatchObject({ status: 'failed' })
+  })
+
+  it('refuses a stale-send time that is not a positive number of minutes', () => {
+    const bare = {} as Parameters<ReturnType<typeof sponsorsPlugin>>[0]
+    for (const bad of [0, -5, Number.NaN, Infinity]) expect(() => sponsorsPlugin({ staleSendMinutes: bad })(bare)).toThrow(/staleSendMinutes/)
+    expect((sponsorsPlugin({ staleSendMinutes: 5 })(bare) as Doc).custom.sponsors).toMatchObject({ staleSendMinutes: 5 })
   })
 })
