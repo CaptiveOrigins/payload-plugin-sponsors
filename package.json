@@ -1,6 +1,6 @@
 {
   "name": "@captiveorigins/payload-plugin-sponsors",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Sponsors for Payload: a public sponsor list with optional tiers, private contacts, and sponsor updates written and sent from the admin.",
   "homepage": "https://github.com/CaptiveOrigins/payload-plugin-sponsors#readme",
   "bugs": {
