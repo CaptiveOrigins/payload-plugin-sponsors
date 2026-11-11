@@ -202,7 +202,7 @@ describe('refusals and failures (test audit 2026-11-10)', () => {
     expect(((await payload.findByID({ collection: 'sponsor-updates' as never, id: nobody.id })) as Doc).status).toBe('draft')
     const busy = await draftUpdate({ all: true })
     await payload.update({ collection: 'sponsor-updates' as never, id: busy.id, data: { status: 'sending' } as never })
-    await expect(sendUpdate(payload, String(busy.id))).rejects.toThrow(/already sent/)
+    await expect(sendUpdate(payload, String(busy.id))).rejects.toThrow(/already sending/)
     expect(mail).toEqual([])
   })
 
@@ -225,12 +225,104 @@ describe('refusals and failures (test audit 2026-11-10)', () => {
       expect(mail.map((m) => m.to)).toEqual(['ok@fail.example'])
       expect(mail[0]!.html).toContain('Fail &lt;b&gt;&amp;&lt;/b&gt; Co')
       expect(mail[0]!.html).not.toContain('<b>&</b>')
-      const saved = (await payload.findByID({ collection: 'sponsor-updates' as never, id: update.id })) as Doc
-      expect(saved.status).toBe('sent')
+      const saved = (await payload.findByID({ collection: 'sponsor-updates' as never, id: update.id, depth: 0 })) as Doc
+      // A failed delivery leaves it partly sent, so staff can see it and send to the rest (fixed 2026-11-10).
+      expect(saved.status).toBe('partial')
       expect(JSON.stringify(saved.report)).not.toContain('@')
+      expect(JSON.stringify(saved)).not.toContain('@')
+      // Sending again tries only the contact that missed it.
+      o.sendEmail = original
+      mail.length = 0
+      expect(await sendUpdate(payload, String(update.id))).toMatchObject({ status: 'sent', sent: 1, alreadySent: 1, failed: 0 })
+      expect(mail.map((m) => m.to)).toEqual(['bounce@fail.example'])
+      await expect(sendUpdate(payload, String(update.id))).rejects.toThrow(/already sent/)
     } finally {
       o.sendEmail = original
       payload.logger.warn = warn
+    }
+  })
+
+  it('sends once when two sends start together: one goes out, the other is refused (fixed 2026-11-10)', async () => {
+    await payload.create({ collection: 'sponsors' as never, data: { name: 'Race Co', listed: true, contacts: [{ email: 'one@race.example' }, { email: 'two@race.example' }] } as never })
+    const race = await findSponsor('Race Co')
+    const update = await draftUpdate({ sponsors: [race.id] }, 'Race update')
+    const o = sponsorsOf(payload)
+    const original = o.sendEmail
+    // Hold deliveries until the other send has been refused (or a short timeout), so both really overlap.
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+      setTimeout(r, 1500)
+    })
+    o.sendEmail = async (args) => {
+      await gate
+      await original!(args)
+    }
+    mail.length = 0
+    try {
+      const send = () => sendUpdate(payload, String(update.id)).catch((e: Error) => (release(), Promise.reject(e)))
+      const results = await Promise.allSettled([send(), send()])
+      expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+      const refused = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+      expect(refused).toHaveLength(1)
+      expect(refused[0]!.reason.message).toBe('This update is already sending.')
+      expect(mail.map((m) => m.to).sort()).toEqual(['one@race.example', 'two@race.example'])
+      expect(((await payload.findByID({ collection: 'sponsor-updates' as never, id: update.id })) as Doc).status).toBe('sent')
+    } finally {
+      o.sendEmail = original
+    }
+  })
+
+  it('a send that stops partway is marked partly sent, and sending again reaches only the rest (fixed 2026-11-10)', async () => {
+    await payload.create({ collection: 'sponsors' as never, data: { name: 'Halt One', listed: true, contacts: [{ email: 'a@halt.example' }, { email: 'b@halt.example' }] } as never })
+    await payload.create({ collection: 'sponsors' as never, data: { name: 'Halt Two', listed: true, contacts: [{ email: 'c@halt.example' }] } as never })
+    const ids = [(await findSponsor('Halt One')).id, (await findSponsor('Halt Two')).id]
+    const o = sponsorsOf(payload)
+    const render = o.renderEmail
+    const errorLog = payload.logger.error
+    payload.logger.error = (() => undefined) as never
+    const stopAfter = (n: number) => {
+      let calls = 0
+      o.renderEmail = (args) => {
+        if (++calls > n) throw new Error('layout broke')
+        return render!(args)
+      }
+    }
+    const status = async (id: unknown) => (await payload.findByID({ collection: 'sponsor-updates' as never, id: id as string, depth: 0 })) as Doc
+    try {
+      // Stops after one email: partly sent, with that contact recorded.
+      const update = await draftUpdate({ sponsors: ids }, 'Halt update')
+      mail.length = 0
+      stopAfter(1)
+      await expect(sendUpdate(payload, String(update.id))).rejects.toThrow(/stopped partway: 1 contact has it so far.*partly sent/)
+      const saved = await status(update.id)
+      expect(saved.status).toBe('partial')
+      expect(saved.report).toMatchObject({ status: 'partial', sent: 1, stoppedEarly: true })
+      expect(saved.delivered).toHaveLength(1)
+      expect(JSON.stringify(saved)).not.toContain('@')
+      const first = mail.map((m) => m.to)
+      expect(first).toHaveLength(1)
+      // The admin preview counts only those still to reach.
+      const preview = await (recipientsEndpoint.handler as (r: unknown) => Promise<Response>)({ user: asUser(admin), payload, routeParams: { id: String(update.id) } })
+      expect(await preview.json()).toMatchObject({ contacts: 2, status: 'partial' })
+      // Sending again reaches the other two, and nobody twice.
+      o.renderEmail = render
+      expect(await sendUpdate(payload, String(update.id))).toMatchObject({ status: 'sent', sent: 2, alreadySent: 1 })
+      expect(mail.map((m) => m.to).sort()).toEqual(['a@halt.example', 'b@halt.example', 'c@halt.example'])
+      expect((await status(update.id)).status).toBe('sent')
+
+      // Stops before anyone gets it: failed, and it can be sent again.
+      const none = await draftUpdate({ sponsors: ids }, 'Halt early')
+      mail.length = 0
+      stopAfter(0)
+      await expect(sendUpdate(payload, String(none.id))).rejects.toThrow(/0 contacts have it so far.*failed/)
+      expect((await status(none.id)).status).toBe('failed')
+      expect(mail).toEqual([])
+      o.renderEmail = render
+      expect(await sendUpdate(payload, String(none.id))).toMatchObject({ status: 'sent', sent: 3, alreadySent: 0 })
+    } finally {
+      o.renderEmail = render
+      payload.logger.error = errorLog
     }
   })
 

@@ -187,6 +187,9 @@ export function updatesCollection(o: ResolvedSponsors, userSlug: string): Collec
               { label: 'Draft', value: 'draft' },
               { label: 'Sending', value: 'sending' },
               { label: 'Sent', value: 'sent' },
+              // A send that didn't reach everyone: sending again reaches only those it missed.
+              { label: 'Partly sent', value: 'partial' },
+              { label: 'Failed', value: 'failed' },
             ],
             admin: { readOnly: true },
           },
@@ -195,6 +198,8 @@ export function updatesCollection(o: ResolvedSponsors, userSlug: string): Collec
       },
       { name: 'sentBy', type: 'relationship', relationTo: userSlug as never, admin: { position: 'sidebar', readOnly: true } },
       { name: 'report', type: 'json', admin: { position: 'sidebar', readOnly: true, description: 'Sponsors and counts (no addresses).' } },
+      // Keyed hashes of the contacts already reached (no addresses), so a resend never emails anyone twice.
+      { name: 'delivered', type: 'json', admin: { hidden: true, readOnly: true } },
     ],
     timestamps: true,
   }

@@ -3,11 +3,12 @@
 import { useConfig, useDocumentInfo } from '@payloadcms/ui'
 import React, { useEffect, useState } from 'react'
 
-type Report = { sent: number; skipped: number; failed: number; sponsors: { name: string; sent: number }[] }
+type Report = { status: 'sent' | 'partial' | 'failed'; sent: number; skipped: number; failed: number; alreadySent: number; sponsors: { name: string; sent: number }[] }
 
 /**
  * In a sponsor update's sidebar: shows who it would reach, asks to confirm,
- * sends it (save first), and reports the result. Sent updates can't be resent.
+ * sends it (save first), and reports the result. Sent updates can't be resent;
+ * a partly sent or failed one can, and then reaches only those it missed.
  */
 export function SendUpdateButton() {
   const { id, collectionSlug } = useDocumentInfo()
@@ -26,22 +27,28 @@ export function SendUpdateButton() {
 
   if (!id) return <p style={{ opacity: 0.7 }}>Save the update, then send it from here.</p>
   if (info?.status === 'sent') return <p>Sent. See the report below.</p>
+  if (info?.status === 'sending') return <p role="status">Sending now. Reload in a moment to see the report.</p>
+  const unfinished = info?.status === 'partial' || info?.status === 'failed'
   const send = async () => {
     if (!info?.contacts) return setMessage('No one to send to yet: choose sponsors or tiers with contacts, then save.')
-    if (!window.confirm(`Send this update to ${info.contacts} contact${info.contacts === 1 ? '' : 's'} at ${info.sponsors} sponsor${info.sponsors === 1 ? '' : 's'}? Save your latest changes first. It can’t be unsent.`)) return
+    const who = `${info.contacts} contact${info.contacts === 1 ? '' : 's'}${unfinished ? ' who haven’t received it yet' : ` at ${info.sponsors} sponsor${info.sponsors === 1 ? '' : 's'}`}`
+    if (!window.confirm(`Send this update to ${who}? Save your latest changes first. It can’t be unsent.`)) return
     setBusy(true)
     const res = await fetch(`${api}/${id}/send`, { method: 'POST', credentials: 'include' })
     const body = (await res.json().catch(() => null)) as (Report & { errors?: { message: string }[] }) | null
     setBusy(false)
-    if (!res.ok) return setMessage(body?.errors?.[0]?.message ?? 'Sending failed.')
-    setMessage(`Sent ${body!.sent}${body!.skipped ? `, ${body!.skipped} opted out` : ''}${body!.failed ? `, ${body!.failed} failed` : ''}. Reload to see the report.`)
-    setInfo((i) => (i ? { ...i, status: 'sent' } : i))
+    if (!res.ok) return setMessage(`${body?.errors?.[0]?.message ?? 'Sending failed.'} Reload to see the report.`)
+    const b = body!
+    const tail = b.status === 'sent' ? '' : ' Not everyone got it: send again to reach only those who didn’t.'
+    setMessage(`Sent ${b.sent}${b.alreadySent ? ` (${b.alreadySent} already had it)` : ''}${b.skipped ? `, ${b.skipped} opted out` : ''}${b.failed ? `, ${b.failed} failed` : ''}.${tail} Reload to see the report.`)
+    setInfo((i) => (i ? { ...i, status: b.status, contacts: b.failed } : i))
   }
   return (
     <div style={{ marginBottom: 'var(--base)' }}>
       <button type="button" className="btn btn--style-primary btn--size-medium" disabled={busy} onClick={send} style={{ margin: 0 }}>
-        {busy ? 'Sending…' : 'Send update'}
+        {busy ? 'Sending…' : unfinished ? 'Send to the rest' : 'Send update'}
       </button>
+      {unfinished && <p role="status">{info?.status === 'partial' ? 'Partly sent.' : 'Sending failed.'} See the report below.</p>}
       <p style={{ opacity: 0.7, marginTop: 6 }}>{info ? `Reaches ${info.contacts} contact${info.contacts === 1 ? '' : 's'} at ${info.sponsors} sponsor${info.sponsors === 1 ? '' : 's'} (saved recipients).` : ' '}</p>
       {message && <p role="status">{message}</p>}
     </div>

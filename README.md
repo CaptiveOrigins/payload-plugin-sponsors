@@ -9,10 +9,17 @@ private contacts, and **sponsor updates written and sent from the admin**.
   to managers only, never in the public API.
 - **Tiers** (optional): Founding, Gold… with color, description and perks, ordered by drag and drop.
 - **Sponsor updates**: subject and rich-text body in the admin’s own editor; send to all
-  current sponsors, chosen sponsors and/or whole tiers. The admin shows who it will reach and
-  asks to confirm. Every contact gets their own email with a signed **opt-out link**; opted-out
-  contacts and archived sponsors are skipped. Each update keeps a report (counts per sponsor,
-  never addresses) and can’t be sent twice.
+  current sponsors, chosen sponsors and/or whole tiers. "All current sponsors" means every
+  sponsor that isn't archived, listed on the public page or not. The admin shows who it will
+  reach and asks to confirm. Every contact gets their own email with a signed **opt-out link**;
+  opted-out contacts and archived sponsors are skipped. Each update keeps a report (counts per
+  sponsor, never addresses) and can’t be sent twice: if two sends start at once, only one goes
+  out and the other is refused.
+- **When a send doesn't finish**: if a delivery fails, or something breaks partway, the update is
+  marked **Partly sent** (or **Failed** if nobody got it) and the report says so. Sending it again
+  reaches only the contacts who haven't had it; nobody gets it twice. The update remembers who
+  had it as keyed hashes, not addresses. If the server itself stops mid-send, the update stays
+  **Sending**; that case has no automatic way out yet.
 - **Archive first**: archiving hides a sponsor from the public page and from updates while
   keeping their history; restore any time. Deleting stays available for mistakes.
 - **Overview** at `/admin/sponsors`: logos by tier, add, archive/restore, email sponsors.
@@ -67,7 +74,9 @@ const groups = await getSponsors(payload) // [{ tier: { name, … } | null, spon
 
 ## Upgrading from 0.1
 
-The package was briefly named `@captiveorigins/payload-plugin-sponsors` (0.2.x, now deprecated); the exports are unchanged, so only the import path changes.
+Version 0.2.0 was briefly named `@captiveorigins/payload-plugin-sponsor` (singular). If you used
+that name, install `@captiveorigins/payload-plugin-sponsors` instead; the exports are unchanged,
+so only the import path changes.
 
 
 0.2 replaces the numeric `order` fields with drag-and-drop ordering (Payload `orderable`, field

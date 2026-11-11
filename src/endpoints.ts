@@ -1,6 +1,6 @@
 import { APIError, type Endpoint, type PayloadRequest } from 'payload'
 
-import { optOut, recipientsOf, sendUpdate, setArchived, sponsorsOf } from './api.js'
+import { deliveryKey, optOut, recipientsOf, sendUpdate, setArchived, sponsorsOf } from './api.js'
 
 const allowed = async (req: PayloadRequest) => {
   if (!req.user) throw new APIError('Sign in first.', 401, undefined, true)
@@ -16,7 +16,11 @@ export const recipientsEndpoint: Endpoint = {
     const o = sponsorsOf(req.payload)
     const update = await req.payload.findByID({ collection: o.updates as never, id: String(req.routeParams?.id), depth: 0, overrideAccess: true })
     const sponsors = await recipientsOf(req.payload, update as never)
-    const contacts = sponsors.reduce((n, s) => n + (s.contacts ?? []).filter((c) => c.email && !c.optedOut).length, 0)
+    // After a partly finished send, count only those still to reach.
+    const saved = (update as { delivered?: unknown }).delivered
+    const delivered = new Set(Array.isArray(saved) ? saved : [])
+    const remaining = (s: (typeof sponsors)[number]) => (s.contacts ?? []).filter((c) => c.email && !c.optedOut && !delivered.has(deliveryKey(req.payload, String(s.id), c.email)))
+    const contacts = sponsors.reduce((n, s) => n + remaining(s).length, 0)
     return Response.json({ sponsors: sponsors.length, contacts, status: (update as { status?: string }).status ?? 'draft' })
   },
 }

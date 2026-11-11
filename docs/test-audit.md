@@ -2,6 +2,17 @@
 
 Kept by this repo's owning session, per `~/Code/CLAUDE.md` "Test self-audits". Newest first.
 
+## 2026-11-10: the lead's fixes after the first audit
+
+Suite: 10 tests before, 12 after (`npx vitest run`, real Payload, in-memory MongoDB, fake mailer).
+
+- **Double send.** `sendUpdate` now claims the update with one conditional write (`payload.db.updateOne` with the id and `status in [draft, partial, failed]` in `where`). Only one send can win; the other gets "This update is already sending." Test: "sends once when two sends start together…" (two sends with `Promise.allSettled`, deliveries held until the loser is refused: one send, one refusal, each contact emailed once). The existing "already sending" check now expects that wording.
+- **Stuck in "sending".** Anything that throws after the claim (for example `renderEmail`) now records who got it and moves the update to **Partly sent** (`partial`), or **Failed** (`failed`) if nobody did, with `stoppedEarly` in the report, then throws a plain message. A failed delivery also leaves it partly sent instead of sent, so staff can see it. Who got it is kept as keyed hashes in a hidden `delivered` field, never addresses. Sending again reaches only the rest; the report counts them as `alreadySent`. The recipients preview counts only those still to reach, and the send button says "Send to the rest". Tests: "a send that stops partway…" (partial, then failed-before-anyone, each resent with nobody emailed twice) and the updated "counts a failed delivery…" (now partial, then resent to the one that bounced).
+- **README upgrade note.** The git history (commit `01dfb4d`, then `3c22afe`) shows 0.2.0 was named `@captiveorigins/payload-plugin-sponsor`, singular. The note now says so. It no longer says "now deprecated": the npm registry returns 404 for that name, so that couldn't be confirmed.
+- **"All" includes unlisted sponsors.** Left as it is; the README now says "All current sponsors" means every sponsor that isn't archived, listed or not.
+- **Mutation checks.** Each was made in `src/api.ts` and restored exactly. An unconditional claim (`where` on the id only) fails the two-sends test. Dropping the record-on-stop fails the partway test. Not skipping contacts already reached fails the partway and failed-delivery tests. Marking a send with a failed delivery as `sent` fails the failed-delivery test.
+- **Not covered.** The server process dying mid-send still leaves the update in "sending" with no way out but editing it. That needs a stale-claim timeout; it's on the lead's list. The send button changes (`src/client`) are presentation and were type-checked only, not run in a browser.
+
 ## 2026-11-10: first audit
 
 Suite before: 5 tests. After: 10 tests (`npx vitest run`, all in `test/sponsors.test.ts`, on a real Payload with an in-memory MongoDB and a fake mailer: no email leaves the machine). No `docs/decisions.md` yet, so the promises come from the README and code comments.

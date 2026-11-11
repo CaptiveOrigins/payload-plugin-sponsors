@@ -119,7 +119,31 @@ export async function setArchived(payload: Payload, id: string, archived: boolea
 
 // ---------------------------------------------------------------- sending updates
 
-export type SendReport = { sponsors: { id: string; name: string; sent: number; skipped: number; failed: number }[]; sent: number; skipped: number; failed: number }
+export type SendStatus = 'sent' | 'partial' | 'failed'
+/**
+ * What one send did (counts, never addresses). `alreadySent` counts contacts an
+ * earlier, unfinished send reached, who were not emailed again. `stoppedEarly`
+ * means something other than one delivery failed and the rest weren't tried.
+ */
+export type SendReport = {
+  status: SendStatus
+  sponsors: { id: string; name: string; sent: number; skipped: number; failed: number; alreadySent: number }[]
+  sent: number
+  skipped: number
+  failed: number
+  alreadySent: number
+  stoppedEarly?: boolean
+}
+
+/** Statuses an update may be sent from: a draft, or a send that didn't reach everyone. */
+export const sendableStatuses = ['draft', 'partial', 'failed'] as const
+
+/**
+ * Marks one contact of one sponsor as delivered for an update. A keyed hash, so
+ * the update keeps no addresses; the same contact always gives the same key.
+ */
+export const deliveryKey = (payload: Payload, sponsorId: string, email: string) =>
+  crypto.createHmac('sha256', payload.secret).update(`sponsors-delivered:${JSON.stringify([sponsorId, email.toLowerCase()])}`).digest('base64url')
 
 /** The current sponsors an update goes to (all, or the chosen sponsors and tiers). */
 export async function recipientsOf(payload: Payload, update: { recipients?: { all?: boolean | null; sponsors?: unknown[] | null; tiers?: unknown[] | null } | null }) {
@@ -170,56 +194,90 @@ async function bodyHtml(body: unknown): Promise<string> {
 export async function sendUpdate(payload: Payload, updateId: string, userId?: string | number | null): Promise<SendReport> {
   const o = sponsorsOf(payload)
   if (o.canSend && !(await o.canSend({ payload }))) throw new Error('Sending sponsor updates is turned off here.')
-  const update = (await payload.findByID({ collection: o.updates as CollectionSlug, id: updateId, depth: 0, overrideAccess: true })) as unknown as {
+  type UpdateDoc = {
     id: string
     subject: string
     body: unknown
     status?: string
+    delivered?: unknown
     recipients?: { all?: boolean; sponsors?: unknown[]; tiers?: unknown[] }
   }
-  if (update.status === 'sent' || update.status === 'sending') throw new Error('This update was already sent.')
-  const sponsors = await recipientsOf(payload, update)
+  const read = async () => (await payload.findByID({ collection: o.updates as CollectionSlug, id: updateId, depth: 0, overrideAccess: true })) as unknown as UpdateDoc
+  const refusal = (status?: string) => new Error(status === 'sending' ? 'This update is already sending.' : 'This update was already sent.')
+  const first = await read()
+  if (!sendableStatuses.includes((first.status ?? 'draft') as never)) throw refusal(first.status)
+  const sponsors = await recipientsOf(payload, first)
   if (!sponsors.length) throw new Error('Choose at least one sponsor or tier (or all current sponsors).')
-  await payload.update({ collection: o.updates as CollectionSlug, id: updateId, data: { status: 'sending' } as never, overrideAccess: true })
-  const html = await bodyHtml(update.body)
-  const origin = (o.publicURL || payload.config.serverURL || '').replace(/\/$/, '')
-  const apiRoute = payload.config.routes.api
-  const deliver =
-    o.sendEmail ?? (async ({ payload: p, to, subject, html: h, text, replyTo }) => void (await p.sendEmail({ to, subject, html: h, text, ...(replyTo ? { replyTo } : {}) })))
-  const report: SendReport = { sponsors: [], sent: 0, skipped: 0, failed: 0 }
-  const now = new Date().toISOString()
-  for (const s of sponsors) {
-    const row = { id: String(s.id), name: s.name, sent: 0, skipped: 0, failed: 0 }
-    for (const c of s.contacts ?? []) {
-      if (c.optedOut || !c.email) {
-        row.skipped++
-        continue
-      }
-      const link = `${origin}${apiRoute}/${o.sponsors}/opt-out?t=${encodeURIComponent(optOutToken(payload, String(s.id), c.email))}`
-      const withFooter = `${html}<hr><p style="font-size:12px;color:#666">You receive these updates as a contact for ${escapeHtml(s.name)}. <a href="${link}">Stop these updates</a>.</p>`
-      const text = `${textOf(html)}\n\n—\nYou receive these updates as a contact for ${s.name}. Stop these updates: ${link}`
-      const finished = o.renderEmail ? o.renderEmail({ subject: update.subject, html: withFooter, text, sponsorName: s.name }) : { html: withFooter, text }
-      try {
-        await deliver({ payload, to: c.email, subject: update.subject, html: finished.html, text: finished.text, replyTo: o.replyTo })
-        row.sent++
-      } catch (err) {
-        payload.logger.warn({ err, sponsor: s.id }, 'Sponsors: an update could not be delivered')
-        row.failed++
-      }
-    }
-    report.sponsors.push(row)
-    report.sent += row.sent
-    report.skipped += row.skipped
-    report.failed += row.failed
-    if (row.sent)
-      await payload.update({ collection: o.sponsors as CollectionSlug, id: s.id, data: { lastUpdateAt: now } as never, overrideAccess: true, context: { sponsorsInternal: true } })
-  }
-  await payload.update({
+  // Claim it in one conditional write: only one send can move it to "sending".
+  const claimed = await payload.db.updateOne({
     collection: o.updates as CollectionSlug,
-    id: updateId,
-    data: { status: 'sent', sentAt: now, sentBy: userId ?? null, report } as never,
-    overrideAccess: true,
+    where: { and: [{ id: { equals: updateId } }, { status: { in: [...sendableStatuses] } }] },
+    data: { status: 'sending' },
   })
-  payload.logger.info({ update: updateId, sent: report.sent, skipped: report.skipped, failed: report.failed }, 'Sponsors: update sent')
+  if (!claimed) throw refusal((await read()).status)
+
+  const report: SendReport = { status: 'sent', sponsors: [], sent: 0, skipped: 0, failed: 0, alreadySent: 0 }
+  const now = new Date().toISOString()
+  let delivered = new Set<string>()
+  // Whatever happens after the claim, record who got it, so a resend reaches only the rest.
+  const finish = async (stoppedEarly: boolean) => {
+    for (const k of ['sent', 'skipped', 'failed', 'alreadySent'] as const) report[k] = report.sponsors.reduce((n, r) => n + r[k], 0)
+    if (stoppedEarly) report.stoppedEarly = true
+    report.status = !stoppedEarly && !report.failed ? 'sent' : delivered.size ? 'partial' : 'failed'
+    await payload.update({
+      collection: o.updates as CollectionSlug,
+      id: updateId,
+      data: { status: report.status, sentAt: now, sentBy: userId ?? null, report, delivered: [...delivered] } as never,
+      overrideAccess: true,
+    })
+  }
+  try {
+    const update = await read()
+    delivered = new Set(Array.isArray(update.delivered) ? update.delivered.filter((k): k is string => typeof k === 'string') : [])
+    const html = await bodyHtml(update.body)
+    const origin = (o.publicURL || payload.config.serverURL || '').replace(/\/$/, '')
+    const apiRoute = payload.config.routes.api
+    const deliver =
+      o.sendEmail ?? (async ({ payload: p, to, subject, html: h, text, replyTo }) => void (await p.sendEmail({ to, subject, html: h, text, ...(replyTo ? { replyTo } : {}) })))
+    for (const s of sponsors) {
+      const row = { id: String(s.id), name: s.name, sent: 0, skipped: 0, failed: 0, alreadySent: 0 }
+      report.sponsors.push(row)
+      for (const c of s.contacts ?? []) {
+        if (c.optedOut || !c.email) {
+          row.skipped++
+          continue
+        }
+        const key = deliveryKey(payload, String(s.id), c.email)
+        if (delivered.has(key)) {
+          row.alreadySent++
+          continue
+        }
+        const link = `${origin}${apiRoute}/${o.sponsors}/opt-out?t=${encodeURIComponent(optOutToken(payload, String(s.id), c.email))}`
+        const withFooter = `${html}<hr><p style="font-size:12px;color:#666">You receive these updates as a contact for ${escapeHtml(s.name)}. <a href="${link}">Stop these updates</a>.</p>`
+        const text = `${textOf(html)}\n\n—\nYou receive these updates as a contact for ${s.name}. Stop these updates: ${link}`
+        const finished = o.renderEmail ? o.renderEmail({ subject: update.subject, html: withFooter, text, sponsorName: s.name }) : { html: withFooter, text }
+        try {
+          await deliver({ payload, to: c.email, subject: update.subject, html: finished.html, text: finished.text, replyTo: o.replyTo })
+          delivered.add(key)
+          row.sent++
+        } catch (err) {
+          payload.logger.warn({ err, sponsor: s.id }, 'Sponsors: an update could not be delivered')
+          row.failed++
+        }
+      }
+      if (row.sent)
+        await payload.update({ collection: o.sponsors as CollectionSlug, id: s.id, data: { lastUpdateAt: now } as never, overrideAccess: true, context: { sponsorsInternal: true } })
+    }
+  } catch (err) {
+    await finish(true)
+    payload.logger.error({ err, update: updateId, sent: report.sent }, 'Sponsors: sending stopped partway')
+    const n = delivered.size
+    throw new Error(
+      `Sending stopped partway: ${n} contact${n === 1 ? ' has' : 's have'} it so far. The update is marked ${report.status === 'partial' ? 'partly sent' : 'failed'}; send it again to reach only the rest.`,
+      { cause: err },
+    )
+  }
+  await finish(false)
+  payload.logger.info({ update: updateId, status: report.status, sent: report.sent, skipped: report.skipped, failed: report.failed }, 'Sponsors: update sent')
   return report
 }
