@@ -173,7 +173,7 @@ export function updatesCollection(o: ResolvedSponsors, userSlug: string): Collec
       {
         name: 'send',
         type: 'ui',
-        admin: { position: 'sidebar', components: { Field: '@captiveorigins/payload-plugin-sponsors/client#SendUpdateButton' } },
+        admin: { position: 'sidebar', components: { Field: '@extantape/payload-plugin-sponsors/client#SendUpdateButton' } },
       },
       {
         type: 'row',

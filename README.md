@@ -40,7 +40,7 @@ private contacts, and **sponsor updates written and sent from the admin**.
 
 **Works with:**
 
-- **Membership** (`@captiveorigins/payload-plugin-membership`): from Membership's `onStatusChange`, your site calls `upsertListing()` and `retireListing()`, so members of a tier marked "Members are listed as sponsors" show up here and leave when they cancel. Neither plugin imports the other.
+- **Membership** (`@extantape/payload-plugin-membership`): from Membership's `onStatusChange`, your site calls `upsertListing()` and `retireListing()`, so members of a tier marked "Members are listed as sponsors" show up here and leave when they cancel. Neither plugin imports the other.
 - **Multi-tenant** (`@payloadcms/plugin-multi-tenant`): add the tenant field with `overrides` and set `scopeField`, and new sponsors are placed A–Z within their own site.
 
 **Family.** Sponsors is in the Patronage family, with Membership, Backing, Credits, Printify and Roadmap. Backing and Credits are named but not built yet, and the families are a working draft that may change.
@@ -48,11 +48,11 @@ private contacts, and **sponsor updates written and sent from the admin**.
 ## Install
 
 ```bash
-npm install @captiveorigins/payload-plugin-sponsors
+npm install @extantape/payload-plugin-sponsors
 ```
 
 ```ts
-import { sponsorsPlugin } from '@captiveorigins/payload-plugin-sponsors'
+import { sponsorsPlugin } from '@extantape/payload-plugin-sponsors'
 
 export default buildConfig({
   editor: lexicalEditor(),
@@ -70,7 +70,7 @@ export default buildConfig({
 Show them on your site:
 
 ```ts
-import { getSponsors } from '@captiveorigins/payload-plugin-sponsors'
+import { getSponsors } from '@extantape/payload-plugin-sponsors'
 
 const groups = await getSponsors(payload) // [{ tier: { name, … } | null, sponsors: [...] }]
 ```
@@ -125,8 +125,8 @@ in **Sending** by 0.3.1 have no progress timestamp; they count from their last c
 
 ## Upgrading from 0.1
 
-Version 0.2.0 was briefly named `@captiveorigins/payload-plugin-sponsor` (singular). If you used
-that name, install `@captiveorigins/payload-plugin-sponsors` instead; the exports are unchanged,
+Version 0.2.0 was briefly named `@extantape/payload-plugin-sponsor` (singular). If you used
+that name, install `@extantape/payload-plugin-sponsors` instead; the exports are unchanged,
 so only the import path changes.
 
 
