@@ -36,7 +36,7 @@ private contacts, and **sponsor updates written and sent from the admin**.
 
 ## On its own, and with others
 
-**On its own.** Sponsors needs Payload's Lexical editor, an upload collection for logos (`media` by default) and working email (`payload.sendEmail`, or your own `sendEmail`). It doesn't import any other Captive Origins plugin.
+**On its own.** Sponsors needs Payload's Lexical editor, an upload collection for logos (`media` by default) and working email (`payload.sendEmail`, or your own `sendEmail`). It doesn't import any other plugin.
 
 **Works with:**
 
